@@ -130,9 +130,13 @@ export function listAudioApps(hint?: string): AudioApp[] {
   let apps: AudioApp[]
   try {
     apps = mod.listAudioApps()
-  } catch {
+  } catch (error) {
+    // "No apps are playing audio" and "enumeration failed" look identical in
+    // the UI, so the difference has to reach the log.
+    console.error('[process-audio] listAudioApps failed:', error)
     return []
   }
+  console.log(`[process-audio] ${apps.length} audio sessions`)
 
   const safe = apps.filter((a) => !VOICE_APPS.has(a.executable.toLowerCase()))
   if (!hint) return safe

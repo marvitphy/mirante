@@ -13,7 +13,9 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
-use windows::core::{implement, Error as WinError, Interface, Result as WinResult, GUID, PCWSTR};
+use windows::core::{
+    implement, Error as WinError, Interface, Result as WinResult, GUID, HRESULT, PCWSTR,
+};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH, S_OK, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateActive,
@@ -142,18 +144,43 @@ impl EventHandle {
     }
 }
 
-struct ComScope;
+/// RAII COM initialisation that tolerates an already-initialised thread.
+///
+/// Electron's main thread is already a single-threaded apartment, so asking
+/// for `COINIT_MULTITHREADED` there returns `RPC_E_CHANGED_MODE` rather than
+/// succeeding. That is not a failure: COM is usable, just under a different
+/// apartment model, and WASAPI enumeration works fine in an STA.
+///
+/// Treating it as an error is what made `listAudioApps()` come back empty
+/// inside the app while working perfectly from a bare Node process, where
+/// nothing had initialised COM yet.
+///
+/// `owned` records whether we were the ones who initialised, because only
+/// then may we call `CoUninitialize`.
+struct ComScope {
+    owned: bool,
+}
+
+/// `RPC_E_CHANGED_MODE` — the thread is already in a different apartment.
+const RPC_E_CHANGED_MODE: HRESULT = HRESULT(0x8001_0106_u32 as i32);
 
 impl ComScope {
     fn enter() -> WinResult<Self> {
-        // SAFETY: paired with CoUninitialize in Drop, on the same thread.
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()? };
-        Ok(Self)
+        // SAFETY: balanced by CoUninitialize in Drop, and only when we own it.
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if hr == RPC_E_CHANGED_MODE {
+            return Ok(Self { owned: false });
+        }
+        hr.ok()?;
+        Ok(Self { owned: true })
     }
 }
 
 impl Drop for ComScope {
     fn drop(&mut self) {
+        if !self.owned {
+            return;
+        }
         // SAFETY: balances the CoInitializeEx in `enter`.
         unsafe { CoUninitialize() };
     }
