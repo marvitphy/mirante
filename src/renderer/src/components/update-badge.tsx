@@ -55,6 +55,20 @@ export function UpdateBadge(): JSX.Element | null {
     )
   }
 
+  if (state.status === 'error') {
+    return (
+      <button
+        type="button"
+        className="tm-update tm-update--failed"
+        onClick={() => void checkNow()}
+        title={`${state.message ?? 'Falha na atualizacao'} — clique pra tentar de novo`}
+      >
+        <span className="tm-update__dot" />
+        <span className="tm-update__text label">tentar de novo</span>
+      </button>
+    )
+  }
+
   if (state.status === 'downloading') {
     return (
       <div className="tm-update tm-update--busy" title={`Baixando ${state.version ?? ''}`}>

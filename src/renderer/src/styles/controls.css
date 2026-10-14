@@ -728,3 +728,15 @@
   letter-spacing: var(--tracking-mono);
   opacity: 0.7;
 }
+
+/* A failed update must be visible and retryable, never silent. */
+.tm-update--failed {
+  border: 1px solid var(--tally);
+  color: var(--tally);
+}
+.tm-update--failed .tm-update__dot {
+  background: var(--tally);
+}
+.tm-update--failed .tm-update__text {
+  color: var(--tally);
+}
