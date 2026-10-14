@@ -101,6 +101,9 @@ export class MeshSession {
     profile: 'smooth'
   }
 
+  /** Set once per session, so a manual profile change is not fought over. */
+  private relayThrottled = false
+
   private snapshot: SessionSnapshot = this.buildSnapshot()
 
   // --- React integration --------------------------------------------------
@@ -402,7 +405,16 @@ export class MeshSession {
       onStats: (stats) => {
         const peer = this.peers.get(peerId)
         if (!peer) return
+        const wasRelayed = peer.stats.relayed
         peer.stats = stats
+        // Going through a relay is the only path that costs money, so it is
+        // also the only path worth throttling. Dropping to the thrifty
+        // profile cuts a relayed stream from roughly 5 Mbit/s to 2.5 —
+        // halving both the bill and the odds of saturating someone's upload.
+        if (!wasRelayed && stats.relayed && role === 'publisher') {
+          console.warn(`[rtc] ${peerId} is relayed; dropping to thrifty`)
+          void this.throttleRelayed()
+        }
         this.emit()
       }
     })
@@ -556,6 +568,18 @@ export class MeshSession {
   }
 
   // --- viewing ------------------------------------------------------------
+
+  /**
+   * Drop to the cheapest profile because at least one viewer is on a relay.
+   *
+   * Only ever downgrades: if someone already chose `thrifty`, or picked a
+   * profile deliberately after this fired, we leave their choice alone.
+   */
+  private async throttleRelayed(): Promise<void> {
+    if (this.local.profile === 'thrifty' || this.relayThrottled) return
+    this.relayThrottled = true
+    await this.setScreenProfile('thrifty')
+  }
 
   focus(peerId: string | null): void {
     this.focused = peerId
