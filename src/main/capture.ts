@@ -6,6 +6,7 @@ import {
 } from 'electron'
 
 import { log } from './log'
+import { audioAddonReady, pidForWindow } from './process-audio'
 
 /**
  * Screen capture wiring.
@@ -48,28 +49,60 @@ export interface CaptureSource {
 }
 
 /**
- * How the share's audio is sourced.
+ * What audio to send with a share.
  *
- * `process` is the default whenever the native addon is available, because it
- * is the only option where your friends' voices cannot physically end up in
- * the broadcast. `system` is opt-in and the UI must warn about echo. See
- * src/main/process-audio.ts.
+ * Resolved here, not in the renderer, because it follows mechanically from
+ * what the person picked:
+ *
+ *   a window  -> that window's process, and nothing else
+ *   a screen  -> everything playing, minus the apps carrying voices
+ *
+ * Neither is a question worth asking. The only real choice is sound or no
+ * sound, which is why `CaptureChoice` carries a boolean.
  */
-export type CaptureAudio =
+export type AudioPlan =
   | { kind: 'none' }
-  /** Every app that is playing, minus the ones carrying voices. The default. */
-  | { kind: 'everything' }
+  /** One process tree — the window being shared. */
   | { kind: 'process'; pid: number; label: string }
-  /** Whole-endpoint loopback, voices included. Only when the addon is absent. */
+  /** Every app with audio except the voice blocklist. */
+  | { kind: 'everything' }
+  /** Whole-endpoint loopback, voices included. Only without the addon. */
   | { kind: 'system' }
 
 export interface CaptureChoice {
   sourceId: string
-  audio: CaptureAudio
+  /** The only audio decision the person makes. */
+  withSound: boolean
 }
 
 /** The source the renderer committed to, waiting for its getDisplayMedia call. */
-let armed: { choice: CaptureChoice; source: DesktopCapturerSource } | null = null
+let armed: { plan: AudioPlan; source: DesktopCapturerSource } | null = null
+
+/** Electron names a window source `window:<hwnd>:<n>`. */
+function hwndOf(sourceId: string): number | null {
+  const match = /^window:(\d+):/.exec(sourceId)
+  return match ? Number(match[1]) : null
+}
+
+function planAudio(source: DesktopCapturerSource, withSound: boolean): AudioPlan {
+  if (!withSound) return { kind: 'none' }
+  if (!audioAddonReady()) return { kind: 'system' }
+
+  const hwnd = hwndOf(source.id)
+  if (hwnd !== null) {
+    const pid = pidForWindow(hwnd)
+    // Falling back to 'everything' is right when the window has no resolvable
+    // owner: better to send the machine's sound than silence.
+    if (pid !== null) return { kind: 'process', pid, label: source.name }
+    log('capture', `no pid for window ${source.id}, sending everything instead`)
+  }
+  return { kind: 'everything' }
+}
+
+/** The plan for the armed source, so process-audio can act on it. */
+export function armedAudioPlan(): AudioPlan {
+  return armed?.plan ?? { kind: 'none' }
+}
 
 const THUMBNAIL_SIZE = { width: 480, height: 270 }
 
@@ -116,8 +149,13 @@ export function registerCapture(): void {
       armed = null
       return false
     }
-    armed = { choice, source }
-    log('capture', `armed "${source.name}" audio=${choice.audio.kind}`)
+    const plan = planAudio(source, choice.withSound)
+    armed = { plan, source }
+    log(
+      'capture',
+      `armed "${source.name}" audio=${plan.kind}` +
+        (plan.kind === 'process' ? ` pid=${plan.pid}` : '')
+    )
     return true
   })
 
@@ -141,9 +179,7 @@ export function registerCapture(): void {
         return
       }
 
-      const { choice, source } = armed
-      // One-shot: the next request must arm again.
-      armed = null
+      const { plan, source } = armed
       log('capture', `granting "${source.name}"`)
 
       // Only whole-endpoint loopback can ride inside the display-media stream.
@@ -151,10 +187,7 @@ export function registerCapture(): void {
       // into a track in the renderer — see process-audio.ts.
       callback({
         video: source,
-        audio:
-          choice.audio.kind === 'system' && process.platform === 'win32'
-            ? 'loopback'
-            : undefined
+        audio: plan.kind === 'system' && process.platform === 'win32' ? 'loopback' : undefined
       })
     },
     { useSystemPicker: false }

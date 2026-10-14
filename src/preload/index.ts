@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 import type { CaptureChoice, CaptureSource } from '../main/capture'
-import type { AudioApp, AudioCapability, AudioSourceChoice } from '../main/process-audio'
+import type { AudioApp, AudioCapability } from '../main/process-audio'
 import type { UpdateState } from '../main/updater'
 
 export interface WindowState {
@@ -41,8 +41,11 @@ export interface MiranteApi {
     capability: () => Promise<AudioCapability>
     /** `hint` is usually the shared window title, used to rank the list. */
     listApps: (hint?: string) => Promise<AudioApp[]>
-    /** Returns the PCM format, or null when per-process audio is unavailable. */
-    start: (choice: AudioSourceChoice) => Promise<{ sampleRate: number; channels: number } | null>
+    /**
+     * Begin capturing audio for the source that was just armed. Takes no
+     * argument: what to capture follows from what was picked.
+     */
+    start: () => Promise<{ sampleRate: number; channels: number } | null>
     stop: () => Promise<void>
     /** Interleaved f32 PCM frames from the captured process. */
     onPcm: (handler: (chunk: ArrayBuffer) => void) => () => void
@@ -83,8 +86,8 @@ const api: MiranteApi = {
   audio: {
     capability: () => ipcRenderer.invoke('audio:capability') as Promise<AudioCapability>,
     listApps: (hint) => ipcRenderer.invoke('audio:list-apps', hint) as Promise<AudioApp[]>,
-    start: (choice) =>
-      ipcRenderer.invoke('audio:start', choice) as Promise<{
+    start: () =>
+      ipcRenderer.invoke('audio:start') as Promise<{
         sampleRate: number
         channels: number
       } | null>,

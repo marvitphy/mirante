@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 
-import type { CaptureAudio, CaptureSource } from '../../../main/capture'
+import type { CaptureSource } from '../../../main/capture'
 import type { AudioApp, AudioCapability } from '../../../main/process-audio'
 import { IconClose } from './icons'
 
@@ -24,7 +24,7 @@ import { IconClose } from './icons'
 
 interface SourcePickerProps {
   sources: CaptureSource[]
-  onConfirm: (sourceId: string, audio: CaptureAudio) => void
+  onConfirm: (sourceId: string, withSound: boolean) => void
   onCancel: () => void
 }
 
@@ -40,9 +40,8 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
   )
   const [capability, setCapability] = useState<AudioCapability | null>(null)
   const [apps, setApps] = useState<AudioApp[]>([])
-  /** Sending the machine's sound is what people expect, so it starts on. */
+  /** Sending sound is what people expect, so it starts on. */
   const [sendAudio, setSendAudio] = useState(true)
-  const [allowSystem, setAllowSystem] = useState(false)
 
   const visible = tab === 'screens' ? screens : windows
   const selectedSource = sources.find((s) => s.id === selected) ?? null
@@ -60,11 +59,7 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
   }, [capability?.supported, selectedSource?.name])
 
   function confirm(): void {
-    if (!selected) return
-    let audio: CaptureAudio = { kind: 'none' }
-    if (capability?.supported && sendAudio) audio = { kind: 'everything' }
-    else if (!capability?.supported && allowSystem) audio = { kind: 'system' }
-    onConfirm(selected, audio)
+    if (selected) onConfirm(selected, sendAudio)
   }
 
   useEffect(() => {
@@ -137,59 +132,23 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
         </div>
 
         <section className="tm-audio">
-          <div className="tm-audio__head">
-            <span className="label">Áudio da transmissão</span>
-            {capability?.supported && <span className="tm-flag is-good">sem eco</span>}
-          </div>
+          <label className="tm-switch">
+            <input
+              type="checkbox"
+              checked={sendAudio}
+              onChange={(event) => setSendAudio(event.target.checked)}
+            />
+            <span className="tm-switch__text">
+              <b>Transmitir com som</b>
+              <span>{soundHint(selectedSource, capability?.supported === true, apps)}</span>
+            </span>
+          </label>
 
-          {capability?.supported ? (
-            <>
-              <label className="tm-switch">
-                <input
-                  type="checkbox"
-                  checked={sendAudio}
-                  onChange={(event) => setSendAudio(event.target.checked)}
-                />
-                <span className="tm-switch__text">
-                  <b>Enviar o som do computador</b>
-                  <span>
-                    Tudo que estiver tocando, menos a voz dos seus amigos.
-                  </span>
-                </span>
-              </label>
-
-              {sendAudio && (
-                <div className="tm-audio__summary">
-                  {apps.length > 0 ? (
-                    <p>
-                      <span className="label">entra</span>
-                      {apps.map((a) => shortName(a.executable)).join(' · ')}
-                    </p>
-                  ) : (
-                    <p>
-                      <span className="label">entra</span>
-                      nada tocando no momento — o som entra assim que começar
-                    </p>
-                  )}
-                  <p className="tm-audio__out">
-                    <span className="label">fica de fora</span>
-                    Discord · TeamSpeak · Mirante · Teams · Zoom
-                  </p>
-                </div>
-              )}
-            </>
-          ) : (
-            <label className="tm-check">
-              <input
-                type="checkbox"
-                checked={allowSystem}
-                onChange={(event) => setAllowSystem(event.target.checked)}
-              />
-              <span>
-                Mandar o áudio do sistema inteiro
-                <em> — causa eco se você estiver em chamada</em>
-              </span>
-            </label>
+          {sendAudio && capability?.supported && selectedSource?.kind === 'screen' && (
+            <p className="tm-audio__out">
+              <span className="label">fora</span>
+              Discord · TeamSpeak · Mirante · Teams · Zoom
+            </p>
           )}
         </section>
 
@@ -287,4 +246,24 @@ function SourceTile({
 /** "chrome.exe" reads as noise; "chrome" reads as a thing you recognise. */
 function shortName(executable: string): string {
   return executable.replace(/\.exe$/i, '')
+}
+
+/**
+ * Say what will actually be sent. Nobody has to choose — it follows from the
+ * source — but they should still be able to see it before committing.
+ */
+function soundHint(
+  source: CaptureSource | null,
+  perApp: boolean,
+  apps: AudioApp[]
+): string {
+  if (!source) return 'Escolha uma tela ou janela.'
+  if (!perApp) {
+    return 'Som do sistema inteiro — pode causar eco se você estiver em chamada.'
+  }
+  if (source.kind === 'window') return `Só o som de ${source.name}.`
+  const playing = apps.map((a) => shortName(a.executable)).join(' · ')
+  return playing
+    ? `Tudo que está tocando — ${playing} — menos a voz dos seus amigos.`
+    : 'Tudo que estiver tocando, menos a voz dos seus amigos.'
 }

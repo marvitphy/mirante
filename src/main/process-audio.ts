@@ -2,6 +2,8 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
 
+import { armedAudioPlan, type AudioPlan } from './capture'
+
 /**
  * Per-application audio capture — the anti-echo system.
  *
@@ -20,27 +22,6 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
  * silent sharing or explicitly-warned system loopback.
  */
 
-export type AudioSourceChoice =
-  | { kind: 'none' }
-  /**
-   * Everything the machine is playing EXCEPT the apps that carry other
-   * people's voices.
-   *
-   * This is the only model that matches what someone actually wants when they
-   * share a screen: the game, the video, the browser — but not their friends
-   * talking, because that comes back as echo. Asking which single app to
-   * capture pushes a decision onto the user that they have no way to answer.
-   *
-   * Windows per-process loopback targets ONE process tree at a time, so there
-   * is no "everything except these three" primitive. We get there by running
-   * one capture per allowed process and summing them — see startProcessAudio.
-   */
-  | { kind: 'everything' }
-  /** One specific process tree. For the rare case someone wants exactly that. */
-  | { kind: 'process'; pid: number; label: string }
-  /** Whole-endpoint loopback, voices included. Only when the addon is absent. */
-  | { kind: 'system' }
-
 export interface AudioApp {
   pid: number
   executable: string
@@ -51,6 +32,7 @@ export interface AudioApp {
 interface NativeModule {
   isSupported: () => boolean
   listAudioApps: () => AudioApp[]
+  pidForWindow: (hwnd: number) => number | null
   ProcessAudioCapture: new (
     pid: number,
     mode: 'IncludeTree' | 'ExcludeTree'
@@ -116,6 +98,23 @@ function loadNative(): NativeModule | null {
 export interface AudioCapability {
   supported: boolean
   reason: string | null
+}
+
+/** True when per-application capture is usable right now. */
+export function audioAddonReady(): boolean {
+  return getAudioCapability().supported
+}
+
+/** The process that owns a window, or null when it cannot be resolved. */
+export function pidForWindow(hwnd: number): number | null {
+  const mod = loadNative()
+  if (!mod) return null
+  try {
+    return mod.pidForWindow(hwnd) ?? null
+  } catch (error) {
+    console.warn('[process-audio] pidForWindow failed:', (error as Error).message)
+    return null
+  }
 }
 
 export function getAudioCapability(): AudioCapability {
@@ -214,16 +213,15 @@ function drain(source: Source, out: Float32Array, count: number): void {
  */
 export function startProcessAudio(
   window: BrowserWindow,
-  choice: AudioSourceChoice
+  plan: AudioPlan
 ): { sampleRate: number; channels: number } | null {
   stopProcessAudio()
-  if (choice.kind === 'none' || choice.kind === 'system') return null
+  if (plan.kind === 'none' || plan.kind === 'system') return null
 
   const mod = loadNative()
   if (!mod) return null
 
-  const pids =
-    choice.kind === 'process' ? [choice.pid] : listAudioApps().map((a) => a.pid)
+  const pids = plan.kind === 'process' ? [plan.pid] : listAudioApps().map((a) => a.pid)
 
   if (pids.length === 0) {
     console.log('[process-audio] nothing playing audio to capture')
@@ -285,9 +283,8 @@ export function stopProcessAudio(): void {
 export function registerProcessAudio(window: BrowserWindow): void {
   ipcMain.handle('audio:capability', () => getAudioCapability())
   ipcMain.handle('audio:list-apps', (_event, hint?: string) => listAudioApps(hint))
-  ipcMain.handle('audio:start', (_event, choice: AudioSourceChoice) =>
-    startProcessAudio(window, choice)
-  )
+  // No argument: the plan was already decided when the source was armed.
+  ipcMain.handle('audio:start', () => startProcessAudio(window, armedAudioPlan()))
   ipcMain.handle('audio:stop', () => {
     stopProcessAudio()
   })

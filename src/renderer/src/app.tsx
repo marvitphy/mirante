@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 
-import type { CaptureAudio, CaptureSource } from '../../main/capture'
+import type { CaptureSource } from '../../main/capture'
 import { ControlDock } from './components/control-dock'
 import { IconClose } from './components/icons'
 import { JoinScreen } from './components/join-screen'
@@ -93,72 +93,67 @@ export function App(): JSX.Element {
     setPickerSources(sources)
   }, [snapshot.local.screen, stopScreen])
 
-  const confirmSource = useCallback(
-    async (sourceId: string, audio: CaptureAudio) => {
-      setPickerSources(null)
+  const confirmSource = useCallback(async (sourceId: string, withSound: boolean) => {
+    setPickerSources(null)
 
-      const armed = await window.mirante.capture.arm({ sourceId, audio })
-      if (!armed) {
-        setShareError('Essa janela foi fechada enquanto você escolhia.')
-        return
-      }
+    // Arming resolves what audio to capture from what was picked: a window
+    // sends that window's sound, a screen sends everything except voices.
+    const armed = await window.mirante.capture.arm({ sourceId, withSound })
+    if (!armed) {
+      setShareError('Essa janela foi fechada enquanto você escolhia.')
+      return
+    }
 
-      // Per-process audio is a separate PCM pipe; build its track before the
-      // video resolves so both land in the same stream.
-      //
-      // Failing to build it must never cancel the share. Sharing a screen
-      // without sound is a degraded session; sharing nothing is a broken app.
-      if (audio.kind === 'process' || audio.kind === 'everything') {
-        try {
-          const format = await window.mirante.audio.start(audio)
-          if (format) {
-            pcmRef.current?.close()
-            pcmRef.current = await createPcmTrack(format.sampleRate, format.channels)
-          }
-        } catch (error) {
-          console.error('[share] per-app audio failed, continuing silent:', error)
+    // Failing to get audio must never cancel the share. Sharing a screen
+    // without sound is a degraded session; sharing nothing is a broken app.
+    if (withSound) {
+      try {
+        const format = await window.mirante.audio.start()
+        if (format) {
           pcmRef.current?.close()
-          pcmRef.current = null
-          await window.mirante.audio.stop()
-          setShareError('Transmitindo sem audio: nao consegui capturar o som do aplicativo.')
+          pcmRef.current = await createPcmTrack(format.sampleRate, format.channels)
         }
-      }
-
-      const abandon = async (): Promise<void> => {
+      } catch (error) {
+        console.error('[share] audio failed, continuing silent:', error)
         pcmRef.current?.close()
         pcmRef.current = null
         await window.mirante.audio.stop()
-        window.mirante.capture.disarm()
+        setShareError('Transmitindo sem som: nao consegui capturar o audio.')
       }
+    }
 
-      let stream: MediaStream
-      try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: { ideal: 60, max: 60 } },
-          // Only ask Chromium for audio when it is the one supplying it.
-          // Requesting audio and receiving none makes some builds reject the
-          // whole request.
-          audio: audio.kind === 'system'
-        })
-      } catch (error) {
-        const fault = error as DOMException
-        console.error(`[share] getDisplayMedia failed: ${fault.name} — ${fault.message}`)
-        await abandon()
-        setShareError(`Não consegui abrir a transmissão — ${fault.name}: ${fault.message}`)
-        return
-      }
+    const abandon = async (): Promise<void> => {
+      pcmRef.current?.close()
+      pcmRef.current = null
+      await window.mirante.audio.stop()
+      window.mirante.capture.disarm()
+    }
 
-      const pcm = pcmRef.current
-      if (pcm) stream.addTrack(pcm.track)
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 60, max: 60 } },
+        // We supply audio ourselves as PCM; asking Chromium for it too and
+        // receiving none makes some builds reject the whole request.
+        audio: false
+      })
+    } catch (error) {
+      const fault = error as DOMException
+      console.error(`[share] getDisplayMedia failed: ${fault.name} — ${fault.message}`)
+      await abandon()
+      setShareError(`Não consegui abrir a transmissão — ${fault.name}: ${fault.message}`)
+      return
+    }
 
-      console.log(
-        `[share] ok: ${stream.getVideoTracks().length} video, ` +
-          `${stream.getAudioTracks().length} audio`
-      )
-      await session.setScreen(stream, stream.getVideoTracks()[0]?.label ?? null)
-    },
-    []
-  )
+    const pcm = pcmRef.current
+    if (pcm) stream.addTrack(pcm.track)
+
+    console.log(
+      `[share] ok: ${stream.getVideoTracks().length} video, ` +
+        `${stream.getAudioTracks().length} audio`
+    )
+    await session.setScreen(stream, stream.getVideoTracks()[0]?.label ?? null)
+  }, [])
 
   useEffect(() => {
     return window.mirante.audio.onPcm((chunk) => pcmRef.current?.push(chunk))

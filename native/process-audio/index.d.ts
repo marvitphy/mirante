@@ -47,6 +47,14 @@ export declare function isSupported(): boolean
  */
 export declare function listAudioApps(): Array<AudioApp>
 /**
+ * The pid that owns a window, from its HWND.
+ *
+ * Sharing a window should send that window's audio automatically. Electron
+ * hands us `window:<hwnd>:<n>` as the source id, so the handle is already
+ * available and the user never has to pick an app from a list.
+ */
+export declare function pidForWindow(hwnd: number): number | null
+/**
  * A running capture. Dropping or calling [`ProcessAudioCapture::stop`] releases
  * the device and joins the capture thread.
  */
