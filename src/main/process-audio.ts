@@ -22,9 +22,23 @@ import { app, ipcMain, type BrowserWindow } from 'electron'
 
 export type AudioSourceChoice =
   | { kind: 'none' }
-  /** Capture only this process tree. No echo is structurally possible. */
+  /**
+   * Everything the machine is playing EXCEPT the apps that carry other
+   * people's voices.
+   *
+   * This is the only model that matches what someone actually wants when they
+   * share a screen: the game, the video, the browser — but not their friends
+   * talking, because that comes back as echo. Asking which single app to
+   * capture pushes a decision onto the user that they have no way to answer.
+   *
+   * Windows per-process loopback targets ONE process tree at a time, so there
+   * is no "everything except these three" primitive. We get there by running
+   * one capture per allowed process and summing them — see startProcessAudio.
+   */
+  | { kind: 'everything' }
+  /** One specific process tree. For the rare case someone wants exactly that. */
   | { kind: 'process'; pid: number; label: string }
-  /** Whole-endpoint loopback. Echoes if you are in a call. Opt-in only. */
+  /** Whole-endpoint loopback, voices included. Only when the addon is absent. */
   | { kind: 'system' }
 
 export interface AudioApp {
@@ -157,48 +171,115 @@ export function listAudioApps(hint?: string): AudioApp[] {
 
 type Capture = InstanceType<NativeModule['ProcessAudioCapture']>
 
-let activeCapture: Capture | null = null
+const SAMPLE_RATE = 48_000
+const CHANNELS = 2
+/** f32 stereo frames per 10 ms — the cadence WASAPI delivers at. */
+const MIX_FRAMES = (SAMPLE_RATE / 100) * CHANNELS
+
+interface Source {
+  capture: Capture
+  /** Samples decoded but not yet mixed. */
+  queue: Float32Array[]
+  offset: number
+}
+
+let sources: Source[] = []
+let mixTimer: NodeJS.Timeout | null = null
+
+/** Pull up to `count` samples from one source, zero-filling what it lacks. */
+function drain(source: Source, out: Float32Array, count: number): void {
+  let written = 0
+  while (written < count && source.queue.length > 0) {
+    const chunk = source.queue[0]
+    const take = Math.min(count - written, chunk.length - source.offset)
+    for (let i = 0; i < take; i++) out[written + i] += chunk[source.offset + i]
+    written += take
+    source.offset += take
+    if (source.offset >= chunk.length) {
+      source.queue.shift()
+      source.offset = 0
+    }
+  }
+}
 
 /**
  * Start streaming PCM for `choice` to the renderer, which turns it back into a
  * MediaStreamTrack. Returns the stream format, or null when unavailable.
+ *
+ * For `everything`, one capture is opened per allowed process and their
+ * buffers are summed here. They all read the same render endpoint, so they
+ * share its clock and arrive in lockstep — no resampling, no drift
+ * correction. A process that falls behind contributes silence for that tick
+ * rather than stalling the mix.
  */
 export function startProcessAudio(
   window: BrowserWindow,
   choice: AudioSourceChoice
 ): { sampleRate: number; channels: number } | null {
   stopProcessAudio()
-  if (choice.kind !== 'process') return null
+  if (choice.kind === 'none' || choice.kind === 'system') return null
 
   const mod = loadNative()
   if (!mod) return null
 
-  try {
-    const capture = new mod.ProcessAudioCapture(choice.pid, 'IncludeTree')
-    capture.start((chunk) => {
-      if (window.isDestroyed()) return
-      // Copy out of the Buffer: the renderer needs an owned ArrayBuffer.
-      window.webContents.send(
-        'audio:pcm',
-        chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
-      )
-    })
-    activeCapture = capture
-    return { sampleRate: capture.format.sampleRate, channels: capture.format.channels }
-  } catch (error) {
-    console.error('[process-audio] start failed:', error)
+  const pids =
+    choice.kind === 'process' ? [choice.pid] : listAudioApps().map((a) => a.pid)
+
+  if (pids.length === 0) {
+    console.log('[process-audio] nothing playing audio to capture')
     return null
   }
+
+  for (const pid of pids) {
+    try {
+      const capture = new mod.ProcessAudioCapture(pid, 'IncludeTree')
+      const source: Source = { capture, queue: [], offset: 0 }
+      capture.start((chunk) => {
+        source.queue.push(
+          new Float32Array(
+            chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+          )
+        )
+        // Never let one stalled consumer grow without bound.
+        while (source.queue.length > 64) source.queue.shift()
+      })
+      sources.push(source)
+    } catch (error) {
+      // One app refusing capture must not sink the rest.
+      console.warn(`[process-audio] cannot capture pid ${pid}:`, (error as Error).message)
+    }
+  }
+
+  if (sources.length === 0) return null
+  console.log(`[process-audio] mixing ${sources.length} app(s)`)
+
+  mixTimer = setInterval(() => {
+    if (window.isDestroyed()) return
+    const mixed = new Float32Array(MIX_FRAMES)
+    for (const source of sources) drain(source, mixed, MIX_FRAMES)
+    // Clip rather than wrap: summed streams can exceed unity.
+    for (let i = 0; i < mixed.length; i++) {
+      mixed[i] = mixed[i] > 1 ? 1 : mixed[i] < -1 ? -1 : mixed[i]
+    }
+    window.webContents.send('audio:pcm', mixed.buffer)
+  }, 10)
+
+  return { sampleRate: SAMPLE_RATE, channels: CHANNELS }
 }
 
 export function stopProcessAudio(): void {
-  if (!activeCapture) return
-  try {
-    activeCapture.stop()
-  } catch (error) {
-    console.error('[process-audio] stop failed:', error)
+  if (mixTimer) {
+    clearInterval(mixTimer)
+    mixTimer = null
   }
-  activeCapture = null
+  for (const source of sources) {
+    try {
+      source.capture.stop()
+    } catch (error) {
+      console.error('[process-audio] stop failed:', error)
+    }
+  }
+  sources = []
 }
 
 export function registerProcessAudio(window: BrowserWindow): void {

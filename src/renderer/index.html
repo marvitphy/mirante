@@ -3,10 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- No remote origins: every asset is bundled, so nothing phones home. -->
+    <!--
+      No remote origins: every asset is bundled, so nothing phones home.
+
+      `blob:` IS required in script-src: the per-application audio pipeline
+      compiles its AudioWorklet from a Blob, and a worklet module is fetched
+      as a script. Without it the packaged app threw
+      "Refused to load the script 'blob:file:///...'" and the whole share
+      failed — but only once per-app audio existed, which is why it survived
+      every earlier test.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' ws: wss: blob:; worker-src 'self' blob:"
+      content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' ws: wss: blob:; worker-src 'self' blob:; child-src 'self' blob:"
     />
     <title>Mirante</title>
   </head>

@@ -105,11 +105,22 @@ export function App(): JSX.Element {
 
       // Per-process audio is a separate PCM pipe; build its track before the
       // video resolves so both land in the same stream.
-      if (audio.kind === 'process') {
-        const format = await window.mirante.audio.start(audio)
-        if (format) {
+      //
+      // Failing to build it must never cancel the share. Sharing a screen
+      // without sound is a degraded session; sharing nothing is a broken app.
+      if (audio.kind === 'process' || audio.kind === 'everything') {
+        try {
+          const format = await window.mirante.audio.start(audio)
+          if (format) {
+            pcmRef.current?.close()
+            pcmRef.current = await createPcmTrack(format.sampleRate, format.channels)
+          }
+        } catch (error) {
+          console.error('[share] per-app audio failed, continuing silent:', error)
           pcmRef.current?.close()
-          pcmRef.current = await createPcmTrack(format.sampleRate, format.channels)
+          pcmRef.current = null
+          await window.mirante.audio.stop()
+          setShareError('Transmitindo sem audio: nao consegui capturar o som do aplicativo.')
         }
       }
 

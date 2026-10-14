@@ -740,3 +740,58 @@
 .tm-update--failed .tm-update__text {
   color: var(--tally);
 }
+
+/* --- audio switch ------------------------------------------------------- */
+/* One decision, not a list. "Which single app's sound?" is a question the
+   person has no way to answer; "send my computer's sound, minus your
+   friends' voices" is the thing they actually want. */
+
+.tm-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  cursor: pointer;
+}
+.tm-switch input {
+  margin-top: 3px;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+.tm-switch__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tm-switch__text b {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.tm-switch__text span {
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
+}
+
+.tm-audio__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 27px;
+}
+.tm-audio__summary p {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  min-width: 0;
+  font-size: var(--text-micro);
+  color: var(--text-secondary);
+}
+.tm-audio__summary .label {
+  flex: 0 0 72px;
+}
+.tm-audio__out {
+  color: var(--text-muted) !important;
+}

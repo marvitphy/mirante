@@ -40,7 +40,8 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
   )
   const [capability, setCapability] = useState<AudioCapability | null>(null)
   const [apps, setApps] = useState<AudioApp[]>([])
-  const [audioPid, setAudioPid] = useState<number | null>(null)
+  /** Sending the machine's sound is what people expect, so it starts on. */
+  const [sendAudio, setSendAudio] = useState(true)
   const [allowSystem, setAllowSystem] = useState(false)
 
   const visible = tab === 'screens' ? screens : windows
@@ -54,21 +55,15 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
   // pre-selects that game's audio.
   useEffect(() => {
     if (!capability?.supported) return
-    void window.mirante.audio.listApps(selectedSource?.name).then((list) => {
-      setApps(list)
-      setAudioPid((current) => current ?? list[0]?.pid ?? null)
-    })
+    // Only to show what will be included; nothing here is a choice.
+    void window.mirante.audio.listApps().then(setApps)
   }, [capability?.supported, selectedSource?.name])
 
   function confirm(): void {
     if (!selected) return
     let audio: CaptureAudio = { kind: 'none' }
-    if (capability?.supported && audioPid !== null) {
-      const app = apps.find((a) => a.pid === audioPid)
-      audio = { kind: 'process', pid: audioPid, label: app?.displayName ?? 'app' }
-    } else if (allowSystem) {
-      audio = { kind: 'system' }
-    }
+    if (capability?.supported && sendAudio) audio = { kind: 'everything' }
+    else if (!capability?.supported && allowSystem) audio = { kind: 'system' }
     onConfirm(selected, audio)
   }
 
@@ -143,35 +138,46 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
 
         <section className="tm-audio">
           <div className="tm-audio__head">
-            <span className="label">Áudio</span>
-            <span className={`tm-flag${capability?.supported ? ' is-good' : ' is-warn'}`}>
-              {capability?.supported ? 'por aplicativo · sem eco' : 'por aplicativo indisponível'}
-            </span>
-            {capability?.supported && (
-              <span className="tm-audio__hint">
-                só o processo escolhido entra — voz de amigos nunca
-              </span>
-            )}
+            <span className="label">Áudio da transmissão</span>
+            {capability?.supported && <span className="tm-flag is-good">sem eco</span>}
           </div>
 
           {capability?.supported ? (
-            <div className="tm-audio__list" role="radiogroup" aria-label="Fonte de áudio">
-              <AudioOption
-                checked={audioPid === null}
-                onSelect={() => setAudioPid(null)}
-                title="Sem áudio"
-                detail="só imagem"
-              />
-              {apps.map((app) => (
-                <AudioOption
-                  key={app.pid}
-                  checked={audioPid === app.pid}
-                  onSelect={() => setAudioPid(app.pid)}
-                  title={app.displayName}
-                  detail={app.active ? `${app.executable} · tocando` : app.executable}
+            <>
+              <label className="tm-switch">
+                <input
+                  type="checkbox"
+                  checked={sendAudio}
+                  onChange={(event) => setSendAudio(event.target.checked)}
                 />
-              ))}
-            </div>
+                <span className="tm-switch__text">
+                  <b>Enviar o som do computador</b>
+                  <span>
+                    Tudo que estiver tocando, menos a voz dos seus amigos.
+                  </span>
+                </span>
+              </label>
+
+              {sendAudio && (
+                <div className="tm-audio__summary">
+                  {apps.length > 0 ? (
+                    <p>
+                      <span className="label">entra</span>
+                      {apps.map((a) => shortName(a.executable)).join(' · ')}
+                    </p>
+                  ) : (
+                    <p>
+                      <span className="label">entra</span>
+                      nada tocando no momento — o som entra assim que começar
+                    </p>
+                  )}
+                  <p className="tm-audio__out">
+                    <span className="label">fica de fora</span>
+                    Discord · TeamSpeak · Mirante · Teams · Zoom
+                  </p>
+                </div>
+              )}
+            </>
           ) : (
             <label className="tm-check">
               <input
@@ -278,31 +284,7 @@ function SourceTile({
   )
 }
 
-function AudioOption({
-  checked,
-  onSelect,
-  title,
-  detail
-}: {
-  checked: boolean
-  onSelect: () => void
-  title: string
-  detail: string
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      className={`tm-aopt${checked ? ' is-selected' : ''}`}
-      onClick={onSelect}
-      role="radio"
-      aria-checked={checked}
-      title={`${title} — ${detail}`}
-    >
-      <span className="tm-aopt__dot" aria-hidden="true" />
-      <span className="tm-aopt__text">
-        <span className="tm-aopt__title">{title}</span>
-        <span className="tm-aopt__detail">{detail}</span>
-      </span>
-    </button>
-  )
+/** "chrome.exe" reads as noise; "chrome" reads as a thing you recognise. */
+function shortName(executable: string): string {
+  return executable.replace(/\.exe$/i, '')
 }

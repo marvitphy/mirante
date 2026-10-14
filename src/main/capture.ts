@@ -57,7 +57,10 @@ export interface CaptureSource {
  */
 export type CaptureAudio =
   | { kind: 'none' }
+  /** Every app that is playing, minus the ones carrying voices. The default. */
+  | { kind: 'everything' }
   | { kind: 'process'; pid: number; label: string }
+  /** Whole-endpoint loopback, voices included. Only when the addon is absent. */
   | { kind: 'system' }
 
 export interface CaptureChoice {
