@@ -5,15 +5,15 @@
 //! `ActivateAudioInterfaceAsync`, so we implement the COM completion handler
 //! and block the capture thread until it fires.
 //!
-//! NOTE: this file has not been compiled in the authoring environment (no Rust
-//! toolchain was present). Treat the first `cargo build` as part of bring-up.
+//! Built in CI on windows-latest; see .github/workflows/native.yml.
 
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
-use windows::core::{implement, Error as WinError, Interface, Result as WinResult, GUID, HSTRING, PCWSTR};
+use windows::core::{implement, Error as WinError, Interface, Result as WinResult, GUID, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH, S_OK, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateActive,
@@ -120,6 +120,27 @@ fn windows_build() -> u32 {
 // ---------------------------------------------------------------------------
 // COM scope guard
 // ---------------------------------------------------------------------------
+
+/// A `HANDLE` that may cross a thread boundary.
+///
+/// `HANDLE` is a raw pointer and therefore not `Send`, but a Windows event
+/// handle is explicitly thread-safe: `SetEvent` and `WaitFor*` are documented
+/// as callable from any thread, and ours is created by this module, signalled
+/// from at most two threads, and closed exactly once after the capture thread
+/// has joined.
+#[derive(Clone, Copy)]
+struct EventHandle(HANDLE);
+
+// SAFETY: see the type comment — the underlying Win32 object is thread-safe
+// and its lifetime is bounded by `Capture`, which joins before closing it.
+unsafe impl Send for EventHandle {}
+unsafe impl Sync for EventHandle {}
+
+impl EventHandle {
+    fn raw(self) -> HANDLE {
+        self.0
+    }
+}
 
 struct ComScope;
 
@@ -242,17 +263,17 @@ fn executable_name(pid: u32) -> Option<String> {
 /// signals an event; the capture thread blocks on it and then reads the result.
 #[implement(IActivateAudioInterfaceCompletionHandler)]
 struct ActivationHandler {
-    done: HANDLE,
+    done: EventHandle,
 }
 
 impl IActivateAudioInterfaceCompletionHandler_Impl for ActivationHandler_Impl {
     fn ActivateCompleted(
         &self,
-        _operation: windows::core::Ref<'_, IActivateAudioInterfaceAsyncOperation>,
+        _operation: Option<&IActivateAudioInterfaceAsyncOperation>,
     ) -> WinResult<()> {
         // SAFETY: `done` outlives the operation — the capture thread owns it and
         // waits on it before dropping.
-        unsafe { SetEvent(self.done) }
+        unsafe { SetEvent(self.done.raw()) }
     }
 }
 
@@ -264,15 +285,9 @@ pub struct Capture {
     target_pid: u32,
     mode: LoopbackMode,
     running: Arc<AtomicBool>,
-    stop_event: HANDLE,
+    stop_event: EventHandle,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
-
-// SAFETY: HANDLE is a raw pointer-sized value; the event handle is only ever
-// signalled (SetEvent) and waited on, both of which are thread-safe, and it is
-// closed exactly once in `stop`.
-unsafe impl Send for Capture {}
-unsafe impl Sync for Capture {}
 
 impl Capture {
     pub fn open(target_pid: u32, mode: LoopbackMode) -> WinResult<Self> {
@@ -286,7 +301,7 @@ impl Capture {
             ));
         }
         // SAFETY: manual-reset event, initially unsignalled.
-        let stop_event = unsafe { CreateEventW(None, true, false, PCWSTR::null())? };
+        let stop_event = EventHandle(unsafe { CreateEventW(None, true, false, PCWSTR::null())? });
         Ok(Self {
             target_pid,
             mode,
@@ -325,12 +340,12 @@ impl Capture {
 
     pub fn stop(&mut self) -> WinResult<()> {
         // SAFETY: the event is valid until this function closes it below.
-        unsafe { SetEvent(self.stop_event)? };
+        unsafe { SetEvent(self.stop_event.raw())? };
         if let Some(handle) = self.thread.lock().take() {
             let _ = handle.join();
         }
         // SAFETY: thread has joined, so nothing can wait on the handle any more.
-        unsafe { CloseHandle(self.stop_event)? };
+        unsafe { CloseHandle(self.stop_event.raw())? };
         Ok(())
     }
 }
@@ -368,7 +383,7 @@ fn capture_format() -> WAVEFORMATEXTENSIBLE {
 fn capture_loop<F>(
     target_pid: u32,
     mode: LoopbackMode,
-    stop_event: HANDLE,
+    stop_event: EventHandle,
     running: &AtomicBool,
     mut on_data: F,
 ) -> WinResult<()>
@@ -409,19 +424,19 @@ where
             },
         };
 
-        let done = CreateEventW(None, true, false, PCWSTR::null())?;
+        let done = EventHandle(CreateEventW(None, true, false, PCWSTR::null())?);
         let handler: IActivateAudioInterfaceCompletionHandler =
             ActivationHandler { done }.into();
 
         let operation: IActivateAudioInterfaceAsyncOperation = ActivateAudioInterfaceAsync(
-            &HSTRING::from(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK),
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
             Some(&propvariant as *const BlobPropVariant as *const _),
             &handler,
         )?;
 
-        WaitForSingleObject(done, INFINITE);
-        let _ = CloseHandle(done);
+        WaitForSingleObject(done.raw(), INFINITE);
+        let _ = CloseHandle(done.raw());
 
         let mut activate_result = S_OK;
         let mut activated: Option<windows::core::IUnknown> = None;
@@ -454,7 +469,7 @@ where
         client.Start()?;
 
         let frame_bytes = format.Format.nBlockAlign as usize;
-        let wait_handles = [sample_ready, stop_event];
+        let wait_handles = [sample_ready, stop_event.raw()];
 
         loop {
             // Wake on either "a buffer is ready" or "stop was requested".
