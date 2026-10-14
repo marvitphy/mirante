@@ -28,6 +28,7 @@ features = [
   "Win32_System_Threading",
   "Win32_System_Variant",
   "Win32_Security",
+  "Win32_UI_WindowsAndMessaging",
 ]
 
 # The #[implement] macro expands to paths rooted at `windows_core`, so the

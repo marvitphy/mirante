@@ -16,7 +16,8 @@ use parking_lot::Mutex;
 use windows::core::{
     implement, Error as WinError, Interface, Result as WinResult, GUID, HRESULT, PCWSTR,
 };
-use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH, S_OK, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, MAX_PATH, S_OK, WAIT_OBJECT_0};
+use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateActive,
     IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
@@ -79,6 +80,24 @@ const BUFFER_DURATION_100NS: i64 = 20 * 10_000;
 
 /// Per-process loopback landed in Windows 10 21H2 server build 20348.
 const MIN_BUILD: u32 = 20348;
+
+/// Which process owns a window.
+///
+/// Electron names a window capture source `window:<hwnd>:<n>`, so the HWND is
+/// already in our hands — this turns it into the pid whose audio we should
+/// capture. Sharing a window should send that window's sound and nothing
+/// else, which means nobody has to be asked which app they meant.
+pub fn pid_for_window(hwnd: isize) -> Option<u32> {
+    let mut pid: u32 = 0;
+    // SAFETY: GetWindowThreadProcessId tolerates an invalid handle by
+    // returning 0 and leaving `pid` untouched; we check both.
+    let thread = unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid)) };
+    if thread == 0 || pid == 0 {
+        None
+    } else {
+        Some(pid)
+    }
+}
 
 pub fn is_supported() -> bool {
     windows_build() >= MIN_BUILD
