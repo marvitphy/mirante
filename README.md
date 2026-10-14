@@ -3,12 +3,7 @@
 Suba no mirante. Mostra a tela. Assiste junto.
 
 App desktop para compartilhar tela e câmera ao vivo entre amigos. Mesh P2P — o
-vídeo vai direto de uma máquina para a outra, sem passar por servidor.
-
-Construído a partir de um teardown do TeamSpeak 6 e do Discord instalados nesta
-máquina. O relatório com as evidências está em
-[`docs/teamspeak-rtc-teardown.md`](docs/teamspeak-rtc-teardown.md) — vale ler
-antes de mexer no código, porque quase toda decisão aqui tem uma citação lá.
+vídeo vai direto de uma máquina para a outra, sem passar por servidor de mídia.
 
 ---
 
@@ -57,7 +52,7 @@ npm run dist       # instalador Windows (NSIS)
 
 ### Protocolo de sinalização
 
-Cinco verbos, copiados do TeamSpeak (§3 do relatório):
+Cinco verbos:
 
 | verbo | significado |
 | --- | --- |
@@ -68,7 +63,7 @@ Cinco verbos, copiados do TeamSpeak (§3 do relatório):
 
 ---
 
-## O que foi roubado do teardown
+## Decisões técnicas
 
 | técnica | onde está |
 | --- | --- |
@@ -83,10 +78,9 @@ Cinco verbos, copiados do TeamSpeak (§3 do relatório):
 
 ### O que fazemos melhor
 
-1. **TURN de verdade.** Em nenhuma sessão registrada do TeamSpeak apareceu
-   candidato `typ relay`, e não há string `turn:` no binário. A escada deles
-   para em candidato TCP host — quem está atrás de NAT simétrico simplesmente
-   não conecta. Aqui o servidor emite credenciais efêmeras (ver abaixo).
+1. **TURN de verdade.** Sem retransmissor, a escada de fallback para em
+   candidato TCP host e quem está atrás de NAT simétrico simplesmente não
+   conecta. O servidor emite credenciais efêmeras (ver abaixo).
 2. **Áudio por aplicativo de verdade** — ver próxima seção.
 
 ### Limite honesto do mesh
@@ -105,8 +99,7 @@ Loopback de sistema captura tudo que sai da caixa de som — inclusive a voz dos
 seus amigos voltando. É daí que vem o eco clássico de transmissão.
 
 A solução é capturar **um processo só**. A voz nunca entra no buffer, então não
-há o que filtrar. É o que os dois apps fazem em código nativo:
-`com::teamspeak::video::ProcessAudioCapturer` e o helper de áudio do Discord.
+há o que filtrar.
 
 `native/process-audio/` implementa isso com
 `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` (Windows 10 build 20348+):
