@@ -59,7 +59,6 @@
   top: 0;
   transform: translateY(-8px);
   justify-content: space-between;
-  background: linear-gradient(hsl(258 40% 1% / 0.88), transparent);
 }
 .tm-stage__top[data-visible='true'] {
   transform: translateY(0);
@@ -69,7 +68,6 @@
 .tm-stage__bottom {
   bottom: var(--rail-h);
   transform: translateY(8px);
-  background: linear-gradient(transparent, hsl(258 40% 1% / 0.82));
 }
 .tm-stage__bottom[data-visible='true'] {
   transform: translateY(0);
@@ -110,6 +108,41 @@
 .tm-stage__volume {
   width: 208px;
   flex: 0 0 auto;
+}
+
+/* Each control carries its own plate.
+   A full-width gradient was invisible over dark video and a glaring grey
+   curtain over light video — and since you cannot know what someone is
+   sharing, the only safe backdrop is one that covers just the controls.
+   Discrete plates also match the rest of the interface, where everything is
+   a bordered rectangle rather than a wash. */
+.tm-stage__top > *:not(.tm-stage__spacer),
+.tm-stage__bottom > *:not(.tm-stage__spacer) {
+  background: hsl(258 40% 2% / 0.88);
+  border: 1px solid var(--rule);
+}
+
+.tm-stage__identity {
+  padding: 0 var(--s-3);
+  height: var(--control-h);
+}
+
+.tm-stage__volume {
+  padding: 0 var(--s-3);
+  height: var(--control-h);
+  display: flex;
+  align-items: center;
+}
+
+/* The signal meter is bare otherwise. */
+.tm-stage__bottom .tm-signal {
+  padding: 0 var(--s-3);
+  height: var(--control-h);
+}
+
+/* The tally has its own red border; a second one around it reads as noise. */
+.tm-stage__identity .tm-tally {
+  background: transparent;
 }
 
 /* --- tally ------------------------------------------------------------- */

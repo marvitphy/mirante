@@ -8,6 +8,7 @@ import {
   type SignalPayload,
   type StreamDir
 } from '../../../shared/protocol'
+import { soundJoin, soundLeave, soundLiveEnd, soundLiveStart } from '../lib/sounds'
 import { AudioMixer, type PeerAudio } from './audio-mixer'
 import { EMPTY_STATS, PeerLink, type LinkState, type LinkStats } from './peer-link'
 import { SCREEN_PROFILES, setContentHint, type ScreenProfileName } from './sdp'
@@ -215,11 +216,15 @@ export class MeshSession {
 
       case 'peerJoined': {
         this.peers.set(message.peer.id, this.blankPeer(message.peer, message.state))
+        // Deliberately not fired for the `welcome` list: arriving to a room
+        // of four people should not play four sounds at once.
+        soundJoin()
         this.emit()
         break
       }
 
       case 'peerLeft': {
+        soundLeave()
         this.dropLinks(message.id)
         this.mixer.detach(message.id)
         this.peers.delete(message.id)
@@ -232,7 +237,10 @@ export class MeshSession {
         const peer = this.peers.get(message.id)
         if (!peer) break
         const wasPublishing = peer.state.screen || peer.state.camera || peer.state.mic
+        const wasSharing = peer.state.screen
         peer.state = message.state
+        if (!wasSharing && message.state.screen) soundLiveStart()
+        if (wasSharing && !message.state.screen) soundLiveEnd()
         const nowPublishing = message.state.screen || message.state.camera || message.state.mic
 
         if (!wasPublishing && nowPublishing) this.requestStream(message.id)
@@ -520,6 +528,10 @@ export class MeshSession {
   // --- local publishing ---------------------------------------------------
 
   async setScreen(stream: MediaStream | null, label: string | null): Promise<void> {
+    // Your own broadcast gets the same cue as everyone else's: it is the
+    // confirmation that you are actually live.
+    if (!this.local.screen && stream) soundLiveStart()
+    if (this.local.screen && !stream) soundLiveEnd()
     this.local.screen?.getTracks().forEach((t) => t.stop())
     this.local.screen = stream
     this.local.screenLabel = label

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 
-import { ipcMain, type BrowserWindow } from 'electron'
+import { app, ipcMain, type BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 
 import { log } from './log'
@@ -32,6 +32,9 @@ const { autoUpdater } = electronUpdater
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 export interface UpdateState {
+  /** What is installed right now. Shown next to the badge so two people
+      comparing notes can tell instantly whether they are on the same build. */
+  current: string
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
   version: string | null
   /** 0..100 while downloading. */
@@ -39,7 +42,13 @@ export interface UpdateState {
   message: string | null
 }
 
-let state: UpdateState = { status: 'idle', version: null, percent: 0, message: null }
+let state: UpdateState = {
+  current: app.getVersion(),
+  status: 'idle',
+  version: null,
+  percent: 0,
+  message: null
+}
 let timer: NodeJS.Timeout | null = null
 /**
  * Guards against overlapping checks.

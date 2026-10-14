@@ -41,7 +41,8 @@ export default {
     const fromPath = url.pathname.startsWith('/room/') ? url.pathname.slice(6) : ''
     const room = normaliseRoom(decodeURIComponent(fromPath || url.searchParams.get('room') || ''))
 
-    if (request.headers.get('Upgrade') !== 'websocket') {
+    const wantsPeers = url.searchParams.has('peers')
+    if (request.headers.get('Upgrade') !== 'websocket' && !wantsPeers) {
       return new Response(
         'Mirante signalling. Connect a websocket to /room/<nome>.',
         { status: 426, headers: { 'content-type': 'text/plain; charset=utf-8' } }

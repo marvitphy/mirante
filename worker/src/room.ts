@@ -54,6 +54,21 @@ export class Room extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // Diagnostics. Knowing the room name already lets anyone join it and see
+    // the same list, so this exposes nothing new — it just makes the server's
+    // own view readable without a client attached.
+    if (new URL(request.url).searchParams.has('peers')) {
+      return Response.json({
+        peers: this.peers().map(({ data }) => ({
+          name: data.info.name,
+          id: data.info.id.slice(0, 8),
+          joinedAt: new Date(data.info.joinedAt).toISOString(),
+          publishing: data.state
+        })),
+        sockets: this.ctx.getWebSockets().length
+      })
+    }
+
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('expected websocket', { status: 426 })
     }

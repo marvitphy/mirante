@@ -69,26 +69,38 @@ export interface EncodingProfile {
   degradationPreference: RTCDegradationPreference
 }
 
+/**
+ * Bitrate ceilings, sized for real home connections rather than for a lab.
+ *
+ * The first version of this file topped out at 10 Mbit/s and 60 fps, which is
+ * what a LAN can carry. Over a TURN relay on a residential uplink it is pure
+ * bufferbloat: the encoder fills the pipe, the queue grows, round-trip time
+ * climbs into the tens of seconds, congestion control backs off, and the
+ * whole cycle repeats — which is exactly the sawtooth stutter you feel.
+ *
+ * Brazilian home upload is commonly 5-35 Mbit/s, and in a mesh the publisher
+ * pays for EVERY viewer. Three viewers at 4 Mbit/s is already 12 Mbit/s up.
+ * These numbers leave headroom on purpose.
+ */
 export const SCREEN_PROFILES = {
   /** Reading code or text. Detail over motion. */
   crisp: {
-    maxBitrate: 8_000_000,
+    maxBitrate: 2_500_000,
     maxFramerate: 30,
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail'
   },
   /** Games and video. Motion over detail. */
   smooth: {
-    maxBitrate: 10_000_000,
+    maxBitrate: 4_000_000,
     maxFramerate: 60,
     degradationPreference: 'maintain-framerate',
     contentHint: 'motion'
   },
-  /** Someone on a weak link, or a full mesh. Stays on `detail` on purpose:
-      when bandwidth is scarce, readable text beats smooth motion. */
+  /** A weak link, a full mesh, or anything going through a relay. */
   thrifty: {
-    maxBitrate: 2_500_000,
-    maxFramerate: 30,
+    maxBitrate: 1_000_000,
+    maxFramerate: 24,
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail'
   }
@@ -96,8 +108,22 @@ export const SCREEN_PROFILES = {
 
 export type ScreenProfileName = keyof typeof SCREEN_PROFILES
 
+/**
+ * Capture ceiling.
+ *
+ * Capping at the source matters more than capping the encoder: a 1440p60
+ * capture squeezed into 4 Mbit/s looks far worse than a 1080p30 capture at
+ * the same bitrate, and burns more CPU to produce. Text stays readable
+ * because 1080p is still plenty for a shared screen.
+ */
+export const CAPTURE_CONSTRAINTS: MediaTrackConstraints = {
+  width: { max: 1920 },
+  height: { max: 1080 },
+  frameRate: { ideal: 30, max: 60 }
+}
+
 export const CAMERA_PROFILE: EncodingProfile = {
-  maxBitrate: 1_200_000,
+  maxBitrate: 600_000,
   maxFramerate: 30,
   degradationPreference: 'maintain-framerate',
   contentHint: 'motion'

@@ -74,6 +74,11 @@ export class Signaling {
 
     this.options.onStatus(this.attempt === 0 ? 'connecting' : 'reconnecting')
 
+    // The exact address, including the room path. Two people "in the same
+    // room" who cannot see each other are usually on two different URLs, and
+    // guessing which is a waste of everyone's evening.
+    console.log(`[signal] connecting to ${url}`)
+
     const socket = new WebSocket(url)
     this.socket = socket
 
@@ -103,6 +108,15 @@ export class Signaling {
         this.lastRtt = Date.now() - message.ts
         return
       }
+      if (message.t === 'welcome') {
+        console.log(
+          `[signal] welcome: eu=${message.self.name}/${message.self.id.slice(0, 8)}, ` +
+            `ja na sala=[${message.peers.map((p) => p.name).join(', ') || 'ninguem'}], ` +
+            `ice=${message.iceServers.length} servidores`
+        )
+      }
+      if (message.t === 'peerJoined') console.log(`[signal] entrou: ${message.peer.name}`)
+      if (message.t === 'peerLeft') console.log(`[signal] saiu: ${message.id.slice(0, 8)}`)
       this.options.onMessage(message)
     })
 

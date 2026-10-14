@@ -795,3 +795,11 @@
 .tm-audio__out {
   color: var(--text-muted) !important;
 }
+
+/* The installed version, always visible. Two people comparing notes should
+   never have to dig through a menu to find out they are on different builds. */
+.tm-update__current {
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-mono);
+  color: var(--text-muted);
+}

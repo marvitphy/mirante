@@ -299,6 +299,8 @@ export class PeerLink {
     let frames = 0
     const codecIds = new Set<string>()
 
+    // Pass 1: media counters, and the id of the pair actually carrying them.
+    let selectedPairId: string | null = null
     report.forEach((entry) => {
       if (entry.type === 'outbound-rtp' && entry.kind === 'video' && !entry.isRemote) {
         bytes += (entry.bytesSent as number) ?? 0
@@ -320,34 +322,42 @@ export class PeerLink {
       }
       if (entry.type === 'remote-inbound-rtp') {
         lost += (entry.packetsLost as number) ?? 0
-        if (typeof entry.roundTripTime === 'number') {
-          next.rttMs = Math.round(entry.roundTripTime * 1000)
-        }
       }
-      if (entry.type === 'candidate-pair' && entry.state === 'succeeded' && entry.nominated) {
-        if (typeof entry.currentRoundTripTime === 'number') {
-          next.rttMs = Math.round(entry.currentRoundTripTime * 1000)
-        }
+      // `transport.selectedCandidatePairId` is the authoritative answer to
+      // "which pair is carrying media". Scanning every gathered candidate
+      // instead reports `relay` whenever TURN is merely CONFIGURED, because a
+      // relay candidate is always gathered — which is how a perfectly direct
+      // connection ended up labelled as relayed, and how the automatic
+      // throttle fired on sessions that never needed it.
+      if (entry.type === 'transport' && entry.selectedCandidatePairId) {
+        selectedPairId = entry.selectedCandidatePairId as string
       }
     })
 
-    // Resolve codec name and the selected candidate type in a second pass,
-    // because getStats gives us ids, not objects.
+    // Pass 2: resolve the selected pair, its RTT, and its local candidate.
+    let localCandidateId: string | null = null
+    report.forEach((entry) => {
+      if (entry.type !== 'candidate-pair') return
+      const chosen =
+        selectedPairId !== null ? entry.id === selectedPairId : entry.nominated === true
+      if (!chosen || entry.state !== 'succeeded') return
+      if (typeof entry.currentRoundTripTime === 'number') {
+        next.rttMs = Math.round(entry.currentRoundTripTime * 1000)
+      }
+      localCandidateId = (entry.localCandidateId as string) ?? null
+    })
+
+    // Pass 3: the codec, and the type of the candidate actually in use.
     report.forEach((entry) => {
       if (entry.type === 'codec' && codecIds.has(entry.id as string)) {
         const mime = (entry.mimeType as string) ?? ''
         next.codec = mime.replace(/^video\//, '').replace(/^audio\//, '')
       }
-      if (entry.type === 'local-candidate' && entry.candidateType) {
-        const type = entry.candidateType as string
-        // Prefer reporting the "worst" path in use: relay beats srflx beats host.
-        if (type === 'relay' || (type === 'srflx' && next.candidateType !== 'relay')) {
-          next.candidateType = type
-        } else if (!next.candidateType) {
-          next.candidateType = type
-        }
+      if (entry.type === 'local-candidate' && entry.id === localCandidateId) {
+        next.candidateType = (entry.candidateType as string) ?? ''
       }
     })
+
     next.relayed = next.candidateType === 'relay'
     next.packetsLost = lost
 

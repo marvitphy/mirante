@@ -33,7 +33,12 @@
   padding: var(--tile-pad) var(--s-5);
   overflow-x: auto;
   overflow-y: hidden;
-  background: linear-gradient(transparent, hsl(258 40% 1% / 0.94) 45%);
+  /* No scrim.
+     This used to carry a gradient to 94% opacity, stacked on top of the one
+     the stage chrome already draws. Two curtains on the same edge produce a
+     visible seam and a dark band across the full width of the video — even
+     where there are no tiles at all. The tiles are opaque and bordered; they
+     do not need a backdrop to be readable. */
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--t-panel) var(--ease-out);

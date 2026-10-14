@@ -17,7 +17,13 @@ import type { UpdateState } from '../../../main/updater'
  * person watching.
  */
 
-const IDLE: UpdateState = { status: 'idle', version: null, percent: 0, message: null }
+const IDLE: UpdateState = {
+  current: '',
+  status: 'idle',
+  version: null,
+  percent: 0,
+  message: null
+}
 
 export function UpdateBadge(): JSX.Element | null {
   const [state, setState] = useState<UpdateState>(IDLE)
@@ -56,7 +62,9 @@ export function UpdateBadge(): JSX.Element | null {
         title={`Versão ${state.version} baixada — reinicia e aplica`}
       >
         Atualizar
-        <span className="tm-update__ver num">{state.version}</span>
+        <span className="tm-update__ver num">
+          v{state.current} → v{state.version}
+        </span>
       </button>
     )
   }
@@ -71,6 +79,7 @@ export function UpdateBadge(): JSX.Element | null {
       >
         <span className="tm-update__dot" />
         <span className="tm-update__text label">tentar de novo</span>
+        <span className="tm-update__current num">v{state.current}</span>
       </button>
     )
   }
@@ -96,6 +105,7 @@ export function UpdateBadge(): JSX.Element | null {
     >
       <span className="tm-update__dot" />
       <span className="tm-update__text label">{busy ? 'checando' : 'atualizado'}</span>
+      <span className="tm-update__current num">v{state.current}</span>
     </button>
   )
 }
