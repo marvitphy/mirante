@@ -24,9 +24,13 @@ export function UpdateBadge(): JSX.Element | null {
   const [checking, setChecking] = useState(false)
 
   useEffect(() => {
-    // Absent in dev builds, where there is no release feed to read.
     if (!window.mirante.update) return
-    void window.mirante.update.state().then(setState)
+    // An unreachable updater is a missing convenience, never an error in
+    // someone's face. Swallow and stay idle.
+    window.mirante.update
+      .state()
+      .then(setState)
+      .catch((error: unknown) => console.warn('[update] state unavailable:', error))
     return window.mirante.update.onState(setState)
   }, [])
 
@@ -36,6 +40,8 @@ export function UpdateBadge(): JSX.Element | null {
     setChecking(true)
     try {
       setState(await window.mirante.update.check())
+    } catch (error) {
+      console.warn('[update] check unavailable:', error)
     } finally {
       setChecking(false)
     }

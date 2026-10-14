@@ -54,7 +54,81 @@ let inFlight: Promise<void> | null = null
 /** Where the finished installer actually landed, so we can verify it exists. */
 let downloadedPath: string | null = null
 
-export function registerUpdater(window: BrowserWindow): void {
+/**
+ * Register the IPC surface, unconditionally and before anything that can fail.
+ *
+ * These used to live inside `registerUpdater`, which only runs for packaged
+ * builds and does a pile of setup first. Anything throwing in that setup — or
+ * simply running unpackaged — left the renderer calling a channel nobody was
+ * listening on, and Electron answers that with
+ *
+ *     Error: No handler registered for 'update:check'
+ *
+ * An updater that cannot start should report "no updates", not blow up in the
+ * user's face. Separating registration from startup makes that structural.
+ */
+export function registerUpdaterIpc(): void {
+  ipcMain.handle('update:state', () => state)
+
+  ipcMain.handle('update:check', async () => {
+    if (!started) return state
+    await check()
+    return state
+  })
+
+  ipcMain.on('update:install', () => {
+    if (!started) return
+
+    // Antivirus quarantine and failed renames both end here: the event said
+    // ready, the file is gone. Checking first turns a Windows "cannot find
+    // the file" dialog into a retry.
+    if (downloadedPath && !existsSync(downloadedPath)) {
+      log('update', 'installer vanished before install:', downloadedPath)
+      downloadedPath = null
+      setState({
+        status: 'error',
+        percent: 0,
+        message: 'O instalador sumiu do disco. Baixando de novo.'
+      })
+      void check()
+      return
+    }
+
+    log('update', 'installing and restarting')
+    try {
+      autoUpdater.quitAndInstall(false, true)
+    } catch (error) {
+      log('update', 'quitAndInstall threw:', (error as Error).message)
+      setState({ status: 'error', percent: 0, message: 'Nao consegui iniciar o instalador.' })
+    }
+  })
+}
+
+/** Set once the updater is actually wired and safe to drive. */
+let started = false
+let target: BrowserWindow | null = null
+
+function setState(next: Partial<UpdateState>): void {
+  state = { ...state, ...next }
+  if (target && !target.isDestroyed()) target.webContents.send('update:state', state)
+}
+
+export function startUpdater(window: BrowserWindow): void {
+  target = window
+  try {
+    wire()
+    started = true
+    void check()
+    timer = setInterval(() => void check(), CHECK_INTERVAL_MS)
+  } catch (error) {
+    // No auto-update is a missing convenience. A crash here would cost the
+    // whole app, which is a much worse trade.
+    log('update', 'could not start:', (error as Error).message)
+    setState({ status: 'idle', message: null })
+  }
+}
+
+function wire(): void {
   autoUpdater.autoDownload = true
   // We ask first; see the module comment.
   autoUpdater.autoInstallOnAppQuit = true
@@ -75,10 +149,7 @@ export function registerUpdater(window: BrowserWindow): void {
     debug: () => undefined
   }
 
-  const push = (next: Partial<UpdateState>): void => {
-    state = { ...state, ...next }
-    if (!window.isDestroyed()) window.webContents.send('update:state', state)
-  }
+  const push = setState
 
   autoUpdater.on('checking-for-update', () => push({ status: 'checking', message: null }))
 
@@ -125,39 +196,8 @@ export function registerUpdater(window: BrowserWindow): void {
     )
   })
 
-  ipcMain.handle('update:state', () => state)
-  ipcMain.handle('update:check', async () => {
-    await check()
-    return state
-  })
-  ipcMain.on('update:install', () => {
-    // Antivirus quarantine and failed renames both end here: the event said
-    // ready, the file is gone. Checking first turns a Windows "cannot find
-    // the file" dialog into a retry.
-    if (downloadedPath && !existsSync(downloadedPath)) {
-      log('update', 'installer vanished before install:', downloadedPath)
-      downloadedPath = null
-      push({
-        status: 'error',
-        percent: 0,
-        message: 'O instalador sumiu do disco. Baixando de novo.'
-      })
-      void check()
-      return
-    }
-
-    log('update', 'installing and restarting')
-    try {
-      autoUpdater.quitAndInstall(false, true)
-    } catch (error) {
-      log('update', 'quitAndInstall threw:', (error as Error).message)
-      push({ status: 'error', percent: 0, message: 'Nao consegui iniciar o instalador.' })
-    }
-  })
-
-  void check()
-  timer = setInterval(() => void check(), CHECK_INTERVAL_MS)
 }
+
 
 /** Serialised: a second caller joins the running check instead of starting one. */
 async function check(): Promise<void> {
@@ -177,4 +217,6 @@ async function check(): Promise<void> {
 export function stopUpdater(): void {
   if (timer) clearInterval(timer)
   timer = null
+  started = false
+  target = null
 }

@@ -5,7 +5,7 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { cancelPendingCapture, registerCapture } from './capture'
 import { startLogging } from './log'
 import { registerProcessAudio, stopProcessAudio } from './process-audio'
-import { registerUpdater, stopUpdater } from './updater'
+import { registerUpdaterIpc, startUpdater, stopUpdater } from './updater'
 
 /**
  * Mirante — main process.
@@ -115,8 +115,11 @@ void app.whenReady().then(() => {
   registerCapture()
   registerProcessAudio(mainWindow)
   registerHotkeys()
-  // Packaged builds only: in dev there is no release feed to read.
-  if (app.isPackaged) registerUpdater(mainWindow)
+  // The IPC surface always exists, so the renderer can ask about updates in
+  // any build. Only a packaged build actually drives the updater — there is
+  // no release feed to read from a dev tree.
+  registerUpdaterIpc()
+  if (app.isPackaged) startUpdater(mainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()
