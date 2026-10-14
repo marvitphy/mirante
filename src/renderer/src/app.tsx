@@ -27,13 +27,21 @@ interface JoinDetails {
 }
 
 function loadDefaults(): JoinDetails {
+  const fallback: JoinDetails = { name: '', room: '', server: DEFAULT_SERVER }
   try {
     const raw = localStorage.getItem(STORE_KEY)
-    if (raw) return { server: DEFAULT_SERVER, ...(JSON.parse(raw) as Partial<JoinDetails>) } as JoinDetails
+    if (!raw) return fallback
+    const stored = JSON.parse(raw) as Partial<JoinDetails>
+    return {
+      name: stored.name ?? fallback.name,
+      room: stored.room ?? fallback.room,
+      // A previously-saved empty address must never beat the built-in one.
+      server: stored.server?.trim() || fallback.server
+    }
   } catch {
     // Corrupt or unavailable storage is not worth surfacing.
+    return fallback
   }
-  return { name: '', room: '', server: DEFAULT_SERVER }
 }
 
 export function App(): JSX.Element {

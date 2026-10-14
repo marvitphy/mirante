@@ -47,9 +47,25 @@ export class Signaling {
   }
 
   private open(): void {
+    const url = this.options.url.trim()
+    // A bad address must surface as a message, not as an uncaught
+    // SyntaxError. Anything without a ws:// or wss:// scheme would be
+    // resolved against the page origin — file:// in a packaged build.
+    if (!/^wss?:\/\//i.test(url)) {
+      this.options.onStatus('closed')
+      this.options.onMessage({
+        t: 'error',
+        code: 'bad_server_url',
+        message:
+          `Endereco de servidor invalido: "${this.options.url}". ` +
+          'Use ws:// ou wss:// em "Outro servidor".'
+      })
+      return
+    }
+
     this.options.onStatus(this.attempt === 0 ? 'connecting' : 'reconnecting')
 
-    const socket = new WebSocket(this.options.url)
+    const socket = new WebSocket(url)
     this.socket = socket
 
     socket.addEventListener('open', () => {
