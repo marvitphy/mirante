@@ -1,0 +1,66 @@
+name: native-audio
+
+# Builds the per-process audio addon on its own.
+#
+# This exists because the addon is Rust and the machine it was written on had
+# no Rust toolchain, so it has never been through a compiler. GitHub's
+# windows-latest runner ships one — this workflow is how the code gets
+# compiled and iterated on until it is green.
+#
+# Once it passes reliably, the `continue-on-error` in release.yml can go and
+# the addon becomes a required part of every build.
+
+on:
+  push:
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/process-audio
+
+      - name: Install napi
+        working-directory: native/process-audio
+        run: npm install
+
+      # Compile first, so the failure that matters shows up as the failure.
+      - name: cargo check
+        working-directory: native/process-audio
+        run: cargo check --target x86_64-pc-windows-msvc
+
+      - name: Build addon
+        working-directory: native/process-audio
+        run: npm run build
+
+      - name: Show what came out
+        working-directory: native/process-audio
+        run: Get-ChildItem -Filter *.node, index.js, index.d.ts | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: process-audio-x64
+          path: |
+            native/process-audio/*.node
+            native/process-audio/index.js
+            native/process-audio/index.d.ts
+          if-no-files-found: error

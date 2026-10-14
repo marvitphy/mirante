@@ -33,6 +33,29 @@ jobs:
       - name: Generate icon
         run: npm run icon
 
+      - name: Rust toolchain
+        run: rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/process-audio
+
+      # Per-application audio capture. Allowed to fail for now: the app
+      # degrades to "no audio" without it, and a broken addon must not block
+      # shipping everything else. Drop continue-on-error once native.yml is
+      # reliably green.
+      - name: Build per-application audio addon
+        id: native
+        continue-on-error: true
+        working-directory: native/process-audio
+        run: |
+          npm install
+          npm run build
+
+      - name: Note if the addon did not build
+        if: steps.native.outcome != 'success'
+        run: echo "::warning::native audio addon failed to build — this release ships without per-application audio."
+
       - name: Build and publish
         env:
           # Provided by Actions; electron-builder uses it to create the release
