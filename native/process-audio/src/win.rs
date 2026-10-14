@@ -8,37 +8,61 @@
 //! NOTE: this file has not been compiled in the authoring environment (no Rust
 //! toolchain was present). Treat the first `cargo build` as part of bring-up.
 
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
-use windows::core::{implement, Error as WinError, Interface, Result as WinResult, HSTRING, PCWSTR};
+use windows::core::{implement, Error as WinError, Interface, Result as WinResult, GUID, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, MAX_PATH, S_OK, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
-    IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
-    IAudioCaptureClient, IAudioClient, IAudioSessionControl2, IAudioSessionManager2,
-    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
-    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    AUDCLNT_BUFFERFLAGS_SILENT, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateActive,
+    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
+    IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
+    IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
-    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0, AudioSessionStateActive,
+    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
-use windows::Win32::Media::KernelStreaming::WAVE_FORMAT_EXTENSIBLE;
-use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, BLOB, CLSCTX_ALL,
-    COINIT_MULTITHREADED, VT_BLOB,
+    COINIT_MULTITHREADED,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, OpenProcess, QueryFullProcessImageNameW, SetEvent, WaitForSingleObject,
-    INFINITE, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, OpenProcess, QueryFullProcessImageNameW, SetEvent, WaitForMultipleObjects,
+    WaitForSingleObject, INFINITE, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+
+/// Two constants we declare rather than import.
+///
+/// `KSDATAFORMAT_SUBTYPE_IEEE_FLOAT` and `WAVE_FORMAT_EXTENSIBLE` live in
+/// feature-gated modules that move between releases of the `windows` crate.
+/// They are fixed values defined by the Windows audio ABI and will never
+/// change, so hard-coding them costs nothing and removes two feature flags.
+const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
+    GUID::from_u128(0x0000_0003_0000_0010_8000_00aa_0038_9b71);
+const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+
+/// Layout-compatible stand-in for `PROPVARIANT`.
+///
+/// `ActivateAudioInterfaceAsync` wants activation parameters as a `VT_BLOB`
+/// PROPVARIANT. The `windows` crate models the union opaquely and has moved
+/// the type between modules across versions, so we declare the exact shape the
+/// audio ABI documents and pass a pointer to it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BlobPropVariant {
+    vt: u16,
+    reserved1: u16,
+    reserved2: u16,
+    reserved3: u16,
+    blob: BLOB,
+}
+
+const VT_BLOB_TAG: u16 = 65;
 
 use crate::LoopbackMode;
 
@@ -323,7 +347,7 @@ fn capture_format() -> WAVEFORMATEXTENSIBLE {
     let block_align = (CHANNELS as u16) * (BITS_PER_SAMPLE / 8);
     WAVEFORMATEXTENSIBLE {
         Format: WAVEFORMATEX {
-            wFormatTag: WAVE_FORMAT_EXTENSIBLE as u16,
+            wFormatTag: WAVE_FORMAT_EXTENSIBLE,
             nChannels: CHANNELS as u16,
             nSamplesPerSec: SAMPLE_RATE,
             nAvgBytesPerSec: SAMPLE_RATE * block_align as u32,
@@ -374,15 +398,16 @@ where
         };
 
         // The activation params ride inside a VT_BLOB PROPVARIANT.
-        let mut propvariant = PROPVARIANT::default();
-        {
-            let raw = &mut propvariant as *mut PROPVARIANT as *mut RawPropVariant;
-            (*raw).vt = VT_BLOB.0;
-            (*raw).blob = BLOB {
+        let mut propvariant = BlobPropVariant {
+            vt: VT_BLOB_TAG,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+            blob: BLOB {
                 cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
                 pBlobData: &mut activation_params as *mut _ as *mut u8,
-            };
-        }
+            },
+        };
 
         let done = CreateEventW(None, true, false, PCWSTR::null())?;
         let handler: IActivateAudioInterfaceCompletionHandler =
@@ -391,7 +416,7 @@ where
         let operation: IActivateAudioInterfaceAsyncOperation = ActivateAudioInterfaceAsync(
             &HSTRING::from(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK),
             &IAudioClient::IID,
-            Some(&propvariant),
+            Some(&propvariant as *const BlobPropVariant as *const _),
             &handler,
         )?;
 
@@ -433,11 +458,7 @@ where
 
         loop {
             // Wake on either "a buffer is ready" or "stop was requested".
-            let signalled = windows::Win32::System::Threading::WaitForMultipleObjects(
-                &wait_handles,
-                false,
-                INFINITE,
-            );
+            let signalled = WaitForMultipleObjects(&wait_handles, false, INFINITE);
             if signalled.0 != WAIT_OBJECT_0.0 {
                 break; // stop_event, or an abandoned wait
             }
@@ -476,16 +497,4 @@ where
         let _ = CloseHandle(sample_ready);
         Ok(())
     }
-}
-
-/// Layout-compatible view of `PROPVARIANT` so we can write a `VT_BLOB` payload.
-/// The `windows` crate models the union opaquely; WASAPI requires this exact
-/// shape, documented under `AUDIOCLIENT_ACTIVATION_PARAMS`.
-#[repr(C)]
-struct RawPropVariant {
-    vt: u16,
-    reserved1: u16,
-    reserved2: u16,
-    reserved3: u16,
-    blob: BLOB,
 }

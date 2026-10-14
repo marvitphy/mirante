@@ -16,15 +16,24 @@ parking_lot = "0.12"
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.58"
 features = [
+  # `implement` generates the *_Impl traits used for the COM completion
+  # handler. Without it IActivateAudioInterfaceCompletionHandler_Impl simply
+  # does not exist.
+  "implement",
   "Win32_Foundation",
   "Win32_Media_Audio",
+  "Win32_Media_KernelStreaming",
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",
   "Win32_System_Threading",
   "Win32_System_Variant",
   "Win32_Security",
-  "Win32_UI_Shell_PropertiesSystem",
 ]
+
+# The #[implement] macro expands to paths rooted at `windows_core`, so the
+# crate has to be nameable here even though we never call it directly.
+[target.'cfg(windows)'.dependencies.windows-core]
+version = "0.58"
 
 [build-dependencies]
 napi-build = "2.1"

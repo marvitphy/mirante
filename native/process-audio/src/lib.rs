@@ -40,8 +40,9 @@ mod win;
 use win as backend;
 
 /// Which side of the process tree to keep.
+// `napi(string_enum)` emits Clone and Copy itself; deriving them again is a
+// conflicting implementation.
 #[napi(string_enum)]
-#[derive(Debug, Clone, Copy)]
 pub enum LoopbackMode {
     /// Capture only audio produced by the target process and its children.
     IncludeTree,
