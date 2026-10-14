@@ -54,7 +54,7 @@ jobs:
 
       - name: Show what came out
         working-directory: native/process-audio
-        run: Get-ChildItem -Filter *.node, index.js, index.d.ts | Format-Table Name, Length
+        run: Get-ChildItem -Path *.node, index.js, index.d.ts | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v4
         with:

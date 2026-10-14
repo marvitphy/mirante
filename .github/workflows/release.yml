@@ -40,21 +40,20 @@ jobs:
         with:
           workspaces: native/process-audio
 
-      # Per-application audio capture. Allowed to fail for now: the app
-      # degrades to "no audio" without it, and a broken addon must not block
-      # shipping everything else. Drop continue-on-error once native.yml is
-      # reliably green.
+      # Per-application audio capture — the component that keeps your friends'
+      # voices out of your broadcast. Required: a release without it silently
+      # loses the feature, and nobody would notice until the echo showed up.
       - name: Build per-application audio addon
-        id: native
-        continue-on-error: true
         working-directory: native/process-audio
         run: |
           npm install
           npm run build
 
-      - name: Note if the addon did not build
-        if: steps.native.outcome != 'success'
-        run: echo "::warning::native audio addon failed to build — this release ships without per-application audio."
+      - name: Verify the addon is there
+        working-directory: native/process-audio
+        run: |
+          if (-not (Test-Path *.node)) { throw "no .node produced" }
+          Get-ChildItem -Path *.node, index.js | Format-Table Name, Length
 
       - name: Build and publish
         env:
