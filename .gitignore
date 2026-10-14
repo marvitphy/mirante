@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+target/
+*.node
+.env
+.env.*
+!.env.example
+.DS_Store
+.peer-profile/

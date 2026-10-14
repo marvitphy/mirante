@@ -1,0 +1,36 @@
+appId: com.tvmirante.app
+productName: Mirante
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+extraResources:
+  # The per-process audio addon ships as a resource so the app can load it at
+  # runtime and degrade gracefully when it was not built.
+  - from: native/process-audio
+    to: native/process-audio
+    filter:
+      - index.js
+      - index.d.ts
+      - '*.node'
+# Where the app looks for updates, and where CI pushes them. In GitHub
+# Actions the owner/repo is detected from GITHUB_REPOSITORY, so it does not
+# need repeating here.
+publish:
+  provider: github
+  releaseType: release
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false

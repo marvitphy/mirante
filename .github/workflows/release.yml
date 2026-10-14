@@ -1,0 +1,50 @@
+name: release
+
+# Push a tag, get an installer your friends can download — and that every
+# already-installed copy will pick up automatically.
+#
+#   npm version patch        # bumps package.json and creates the tag
+#   git push --follow-tags
+on:
+  push:
+    tags:
+      - 'v*'
+  # Handy for testing the pipeline without cutting a release.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate icon
+        run: npm run icon
+
+      - name: Build and publish
+        env:
+          # Provided by Actions; electron-builder uses it to create the release
+          # and upload the installer plus the latest.yml that clients poll.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The signalling server every installed copy will talk to. Set this
+          # as a repository variable, or the build ships pointing at localhost
+          # and nobody can connect to anybody.
+          MIRANTE_SIGNAL_URL: ${{ vars.MIRANTE_SIGNAL_URL }}
+        run: npm run release
+
+      - name: Warn if the signalling URL was not set
+        if: ${{ vars.MIRANTE_SIGNAL_URL == '' }}
+        run: |
+          echo "::warning::MIRANTE_SIGNAL_URL is empty — this build points at ws://localhost:8787 and will not connect for anyone else. Set it under Settings → Secrets and variables → Actions → Variables."

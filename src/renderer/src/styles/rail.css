@@ -1,0 +1,310 @@
+/*
+ * The guarda-corpo — the lookout railing where everyone leans.
+ *
+ * It floats over the bottom of the stage and fades with the player chrome, so
+ * the video never permanently loses space it has not earned.
+ *
+ * SIZING IS EXACT, NOT DERIVED. Every dimension comes from a token and adds up
+ * to the rail height on purpose:
+ *
+ *     1  tile top border
+ *  + 80  frame   (--tile-frame-h, exactly 16:10 of the 128px width)
+ *  + 26  foot    (--tile-foot-h)
+ *  +  1  tile bottom border
+ *  = 108 tile
+ *  + 24  symmetric vertical padding (2 x --tile-pad)
+ *  = 132 rail   (--rail-h)
+ *
+ * The previous version declared `aspect-ratio: 16/10` on a 136px tile inside a
+ * 104px rail — 115px of content in a 104px box, clipped top and bottom. Never
+ * let a flexible ratio decide the height of a fixed-height container.
+ */
+
+.tm-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  height: var(--rail-h);
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--tile-pad) var(--s-5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: linear-gradient(transparent, hsl(258 40% 1% / 0.94) 45%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-panel) var(--ease-out);
+}
+.tm-rail[data-visible='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tm-rail::-webkit-scrollbar {
+  height: 0;
+}
+
+.tm-rail__lonely {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  letter-spacing: var(--tracking-mono);
+  color: var(--text-muted);
+}
+
+/* --- tile -------------------------------------------------------------- */
+/* Self and peer render the same component, so they are the same box with the
+   same baseline. Only the right-hand slot of the foot differs. */
+
+.tm-tile {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  width: calc(var(--tile-w) + 2px);
+  height: calc(var(--tile-frame-h) + var(--tile-foot-h) + 2px);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.tm-tile:hover {
+  border-color: var(--rule-strong);
+  background: var(--surface-3);
+}
+
+/* The person on the stage carries the only accent down here. */
+.tm-tile.is-active {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+
+.tm-tile__hit {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+}
+
+.tm-tile__frame {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  height: var(--tile-frame-h);
+  overflow: hidden;
+  background: var(--surface-stage);
+  display: grid;
+  place-items: center;
+  border-bottom: 1px solid var(--rule-faint);
+}
+
+.tm-tile__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tm-tile__video.is-mirrored {
+  transform: scaleX(-1);
+}
+
+.tm-avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-full);
+  font-size: var(--text-h4);
+  font-weight: 700;
+}
+
+.tm-tile__badge {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  left: 4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  background: hsl(258 40% 2% / 0.85);
+  border: 1px solid var(--tally);
+  color: var(--tally);
+}
+
+.tm-tile__self-mark {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  right: 4px;
+  padding: 1px 5px;
+  background: hsl(258 40% 2% / 0.85);
+  color: var(--text-tertiary);
+}
+
+/* Fixed height, so every foot across the rail sits on one line. */
+.tm-tile__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  flex: 0 0 auto;
+  width: 100%;
+  height: var(--tile-foot-h);
+  padding: 0 var(--s-2) 0 var(--s-3);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tm-tile__name {
+  /* Zero flex-basis: the name's own width must never become the floor. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.tm-tile.is-active .tm-tile__name {
+  color: var(--text-primary);
+}
+
+/* Both tile kinds reserve the same slot on the right — mic for you, signal
+   meter for everyone else — so the names line up across the whole rail. */
+.tm-tile__slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 18px;
+  color: var(--text-tertiary);
+}
+.tm-tile__slot.is-off {
+  color: var(--text-muted);
+}
+
+/* Speaking ring, written straight from the analyser — never through React,
+   so a talking friend does not re-render the rail sixty times a second. */
+.tm-tile__ring {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border: 1px solid var(--signal-good);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms linear;
+}
+
+.tm-tile__volume-toggle {
+  position: absolute;
+  z-index: 3;
+  right: 4px;
+  bottom: calc(var(--tile-foot-h) + 4px);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  background: hsl(258 40% 2% / 0.88);
+  border: 1px solid var(--rule);
+  color: var(--text-tertiary);
+  /* Dim but present. At opacity 0 nobody ever found this control, and you
+     could not tell you had already turned someone down. */
+  opacity: 0.45;
+  transition:
+    opacity var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+.tm-tile:hover .tm-tile__volume-toggle,
+.tm-tile__volume-toggle:focus-visible,
+.tm-tile__volume-toggle.is-touched {
+  opacity: 1;
+}
+.tm-tile__volume-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--rule-strong);
+}
+.tm-tile__volume-toggle.is-touched {
+  color: var(--accent);
+  border-color: var(--accent-edge);
+}
+.tm-tile__volume-toggle.is-muted {
+  color: var(--tally);
+  border-color: var(--tally);
+}
+
+.tm-tile__popover {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: -1px;
+  right: -1px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  background: var(--surface-3);
+  border: 1px solid var(--rule-strong);
+  /* Popovers scale from their trigger, never from centre. */
+  transform-origin: bottom center;
+  animation: tm-pop var(--t-pop) var(--ease-out);
+}
+
+@keyframes tm-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+}
+
+/* --- signal meter ------------------------------------------------------ */
+/* Telemetry as ornament: you can tell who is struggling without reading a
+   single number. */
+
+.tm-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.tm-signal__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+}
+
+.tm-signal__seg {
+  width: 2px;
+  transition:
+    background var(--t-panel) var(--ease-out),
+    opacity var(--t-panel) var(--ease-out);
+}
+
+.tm-signal--inline .tm-signal__bars {
+  height: 14px;
+}
+.tm-signal--inline .tm-signal__seg {
+  width: 3px;
+}
+
+.tm-signal__read {
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-mono);
+  color: var(--text-tertiary);
+}
+
+.tm-signal__relay {
+  margin-left: 4px;
+  padding: 0 3px;
+  border: 1px solid var(--accent-edge);
+  color: var(--accent);
+}

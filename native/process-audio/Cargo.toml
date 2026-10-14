@@ -1,0 +1,34 @@
+[package]
+name = "mirante-process-audio"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.16", default-features = false, features = ["napi6", "async"] }
+napi-derive = "2.16"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Threading",
+  "Win32_System_Variant",
+  "Win32_Security",
+  "Win32_UI_Shell_PropertiesSystem",
+]
+
+[build-dependencies]
+napi-build = "2.1"
+
+[profile.release]
+lto = true
+strip = "symbols"

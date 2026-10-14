@@ -1,0 +1,160 @@
+/*
+ * Mirante — design tokens.
+ *
+ * Direction: BRUTALISMO DE LUXO.
+ * A broadcast equipment rack designed by someone who reads Swiss type books.
+ * Hard corners, visible structure, oversized display type set tight, every
+ * piece of metadata silkscreened in monospace like an anodized faceplate.
+ *
+ * Four rules this file enforces:
+ *   1. RADIUS IS ZERO. A corner is a corner. Only physically round things
+ *      (the tally lamp, an avatar, a level ring) get a radius.
+ *   2. Hairlines are STRUCTURE — visible on purpose, forming a grid you see.
+ *   3. Numbers and labels are monospace, uppercase, tracked out. Always.
+ *   4. CONTRAST IS LOUD. Surface steps are wide, text tiers are far apart.
+ *      A dark interface that whispers just reads as unfinished.
+ *
+ * Accent is named --accent, never --lilac. Colour is a decision that changes;
+ * the role it plays does not.
+ */
+
+:root {
+  /* --- the night ------------------------------------------------------- */
+  /* One hue (258, cold violet-black) so the lilac accent feels native to the
+     surface rather than dropped on top of a neutral grey. Steps are wide —
+     roughly 4 points of lightness each — so layering is legible, not implied. */
+  --surface-base: hsl(258 20% 4%);
+  --surface-1: hsl(258 17% 7.5%);
+  --surface-2: hsl(258 15% 11%);
+  --surface-3: hsl(258 14% 15.5%);
+  --surface-4: hsl(258 13% 21%);
+  /* Inputs are recessed: darker than whatever surrounds them. */
+  --surface-input: hsl(258 26% 2.5%);
+  /* The stage is a hole cut through the faceplate. */
+  --surface-stage: hsl(258 40% 1.2%);
+
+  /* --- light ------------------------------------------------------------ */
+  /* Four tiers, pushed apart. Primary is near-white; muted is genuinely dim.
+     Nothing sits in the mushy middle. */
+  --text-primary: hsl(255 20% 98%);
+  --text-secondary: hsl(255 10% 80%);
+  --text-tertiary: hsl(255 9% 59%);
+  --text-muted: hsl(255 10% 40%);
+
+  /* --- the single accent ------------------------------------------------ */
+  /* Lilac. Reserved for the primary action, the current selection, and
+     nothing else. Roughly 10% of any screen. */
+  --accent: hsl(263 88% 72%);
+  --accent-bright: hsl(263 96% 82%);
+  --accent-deep: hsl(263 62% 48%);
+  --accent-ink: hsl(262 60% 8%); /* text sitting on a filled accent */
+  --accent-wash: hsl(263 88% 72% / 0.14);
+  --accent-edge: hsl(263 88% 72% / 0.52);
+  --accent-glow: hsl(263 88% 72% / 0.3);
+
+  /* --- broadcast semantics ---------------------------------------------- */
+  --tally: hsl(352 85% 63%); /* the lamp on a studio camera. ON AIR only. */
+  --tally-wash: hsl(352 85% 63% / 0.14);
+  --tally-edge: hsl(352 85% 63% / 0.5);
+
+  /* Signal health. Teal reads as "fine" without competing with the lilac. */
+  --signal-good: hsl(168 68% 58%);
+  --signal-fair: hsl(42 95% 62%);
+  --signal-poor: hsl(352 85% 63%);
+  --signal-dead: hsl(258 10% 26%);
+
+  /* --- rules ------------------------------------------------------------ */
+  /* Stronger than the usual apologetic 5%. These are structure; you are meant
+     to see the grid. */
+  --rule-faint: hsl(260 30% 100% / 0.07);
+  --rule: hsl(260 30% 100% / 0.15);
+  --rule-strong: hsl(260 30% 100% / 0.28);
+  --rule-accent: hsl(263 88% 72% / 0.55);
+  --focus-ring: hsl(263 96% 82%);
+
+  /* --- type ------------------------------------------------------------- */
+  /* Archivo: a grotesque with signage bones, pushed to heavy weights and
+     negative tracking at display sizes. Plex Mono carries ALL labelling and
+     every number — that register is the personality, not decoration. */
+  --font-ui: 'Archivo Variable', 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+
+  /* 13px base. Small body, enormous display — the gap between them IS the
+     luxury signal. Mid sizes stay deliberately sparse. */
+  --text-nano: 10px;
+  --text-caption: 11px;
+  --text-micro: 12px;
+  --text-body: 13px;
+  --text-h4: 15px;
+  --text-h3: 19px;
+  --text-h2: 26px;
+  --text-h1: 40px;
+  --text-display: 68px;
+  --text-mega: 108px;
+
+  /* Labels tracked wide, display tracked tight. The distance between those
+     two extremes is most of what reads as "designed". */
+  --tracking-label: 0.16em;
+  --tracking-mono: 0.08em;
+  --tracking-tight: -0.02em;
+  --tracking-display: -0.045em;
+
+  /* --- space ------------------------------------------------------------ */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
+  --s-24: 96px;
+
+  /* --- radius ----------------------------------------------------------- */
+  --r-0: 0;
+  --r-full: 999px;
+
+  /* --- structure -------------------------------------------------------- */
+  --titlebar-h: 34px;
+  --dock-h: 60px;
+  /* The rail floats over the stage instead of occupying a grid row. The video
+     is the product; nothing permanently takes space away from it.
+
+     These five numbers are load-bearing and must stay consistent, which is why
+     they are tokens rather than values sprinkled through rail.css:
+
+       frame 128x80  is exactly 16:10, so no fractional pixel ever blurs it
+       tile  = 1 + 80 + 26 + 1 = 108   (borders + frame + foot + border)
+       rail  = 108 + 2*12      = 132   (tile + symmetric vertical padding)
+
+     Earlier this was a 136px tile declared with aspect-ratio inside a 104px
+     rail: 115px of content in 104px of box, clipped at the bottom. */
+  --tile-w: 128px;
+  --tile-frame-h: 80px;
+  --tile-foot-h: 26px;
+  --tile-pad: 12px;
+  --rail-h: 132px;
+  /* One height for every control, so every row shares a baseline. */
+  --control-h: 34px;
+
+  /* --- motion ----------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+  --t-press: 90ms;
+  --t-fast: 140ms;
+  --t-pop: 180ms;
+  --t-panel: 230ms;
+}
+
+/* The single most-used idiom in this interface. */
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--text-nano);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}

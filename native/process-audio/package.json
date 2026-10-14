@@ -1,0 +1,19 @@
+{
+  "name": "@tvmirante/process-audio",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "types": "index.d.ts",
+  "description": "Per-process WASAPI loopback capture for Windows. Keeps your friends' voices out of your broadcast.",
+  "napi": {
+    "name": "mirante-process-audio",
+    "triples": { "defaults": false, "additional": ["x86_64-pc-windows-msvc"] }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  }
+}
