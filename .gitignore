@@ -8,3 +8,5 @@ target/
 !.env.example
 .DS_Store
 .peer-profile/
+.wrangler/
+worker/node_modules/

@@ -24,7 +24,16 @@ export interface SignalingOptions {
 
 const RECONNECT_BASE_MS = 600
 const RECONNECT_MAX_MS = 8_000
-const PING_INTERVAL_MS = 5_000
+/**
+ * Keepalive period.
+ *
+ * Was 5 s, which is 17,280 messages per peer per day — on Cloudflare a
+ * WebSocket message is a billed request, so a few friends idling would have
+ * eaten the whole free tier on keepalives. At 25 s it is under 3,500, and the
+ * literal 'ping' below is auto-answered at the edge without waking the
+ * Durable Object at all.
+ */
+const PING_INTERVAL_MS = 25_000
 
 export class Signaling {
   private socket: WebSocket | null = null
@@ -81,6 +90,9 @@ export class Signaling {
     })
 
     socket.addEventListener('message', (event: MessageEvent<string>) => {
+      // Auto-responded keepalive; nothing to do.
+      if (event.data === 'pong') return
+
       let message: ServerMessage
       try {
         message = JSON.parse(event.data) as ServerMessage
@@ -120,7 +132,11 @@ export class Signaling {
   private startPing(): void {
     this.stopPing()
     this.pingTimer = window.setInterval(() => {
-      this.send({ t: 'ping', ts: Date.now() })
+      // A bare string, not JSON: it has to match the auto-response pair the
+      // worker registers exactly. The old JSON ping measured signalling RTT,
+      // which was never shown anywhere — the latency in the UI comes from
+      // getStats() on the peer connection, which is the number that matters.
+      if (this.socket?.readyState === WebSocket.OPEN) this.socket.send('ping')
     }, PING_INTERVAL_MS)
   }
 

@@ -142,7 +142,11 @@ export class MeshSession {
     this.disconnect()
     this.error = null
     this.signaling = new Signaling({
-      url,
+      // The room goes in the path because the Cloudflare worker routes to a
+      // Durable Object by URL — one object per room IS the room. The Node dev
+      // server ignores the path and reads the room from `hello` instead, so
+      // the same client works against both.
+      url: `${url.replace(/\/+$/, '')}/room/${encodeURIComponent(room)}`,
       room,
       name,
       onStatus: (status) => {
