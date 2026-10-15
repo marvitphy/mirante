@@ -28,6 +28,9 @@ import { Signaling, type SignalingStatus } from './signaling'
  */
 const REJOIN_AFTER_MS = 20_000
 
+/** The slots that carry sound, in the order the mixer should receive them. */
+const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
+
 /**
  * Mesh session — the one place that knows the topology.
  *
@@ -465,8 +468,9 @@ export class MeshSession {
         if (track.kind === 'audio') {
           // Both audio slots feed one per-person volume control: from the
           // listener's side, "how loud is this person" is a single question.
-          this.mixer.attach(peerId, stream)
-          peer.audible = true
+          // They go in together — handing them over one at a time made the
+          // second one evict the first.
+          this.attachAudio(peer)
         }
 
         if (this.focused === null && slot === 'screen') this.focused = peerId
@@ -561,6 +565,22 @@ export class MeshSession {
     if (timer === undefined) return
     window.clearTimeout(timer)
     this.rejoinTimers.delete(peerId)
+  }
+
+  /**
+   * Hand the mixer every audio stream this peer has, in one call.
+   *
+   * Screen audio and microphone arrive on separate slots and at separate
+   * times, and the mixer rebuilds the peer's channel from scratch on each
+   * call, so they have to be presented together or the later one silences the
+   * earlier.
+   */
+  private attachAudio(peer: PeerView): void {
+    const streams = AUDIO_SLOTS.map((slot) => peer.streams.get(slot)).filter(
+      (stream): stream is MediaStream => stream !== undefined
+    )
+    this.mixer.attach(peer.info.id, streams)
+    peer.audible = this.mixer.isAudible(peer.info.id)
   }
 
   private requestStream(peerId: string): void {

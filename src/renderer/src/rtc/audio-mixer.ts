@@ -21,14 +21,26 @@ export interface PeerAudio {
 
 export const DEFAULT_PEER_AUDIO: PeerAudio = { volume: 1, muted: false }
 
-interface Channel {
+/**
+ * One incoming audio stream, wired into its peer's channel.
+ *
+ * There is one of these per audio track a peer sends — screen audio and
+ * microphone are separate tracks and have to stay separate all the way to the
+ * gain node, because `createMediaStreamSource` reads only the FIRST audio
+ * track of a stream. Putting both in one MediaStream silently drops one.
+ */
+interface Input {
   stream: MediaStream
   source: MediaStreamAudioSourceNode
+  /** Kept alive so Chromium does not garbage-collect the receiver's stream. */
+  sink: HTMLAudioElement
+}
+
+interface Channel {
+  inputs: Input[]
   gain: GainNode
   analyser: AnalyserNode
   buffer: Float32Array<ArrayBuffer>
-  /** Kept alive so Chromium does not garbage-collect the receiver's stream. */
-  sink: HTMLAudioElement
 }
 
 export class AudioMixer {
@@ -66,43 +78,62 @@ export class AudioMixer {
     this.ensureContext()
   }
 
-  attach(peerId: string, stream: MediaStream): void {
-    if (stream.getAudioTracks().length === 0) return
+  /**
+   * Route everything one peer sends through a single volume control.
+   *
+   * Takes ALL of their audio streams at once rather than one at a time. The
+   * one-at-a-time version looked fine and was broken: each call began by
+   * tearing down the previous channel, so a peer sending screen audio and
+   * microphone ended up with only whichever arrived last — and since fixed
+   * slots mean the microphone transceiver fires even when nobody has a
+   * microphone on, the last arrival was a silent track that wiped the screen
+   * audio. Viewers watched the picture and heard nothing.
+   */
+  attach(peerId: string, streams: MediaStream[]): void {
+    const live = streams.filter((stream) => stream.getAudioTracks().length > 0)
+    if (live.length === 0) {
+      this.detach(peerId)
+      return
+    }
+
     this.detach(peerId)
 
     const context = this.ensureContext()
-    const source = context.createMediaStreamSource(stream)
     const gain = context.createGain()
     const analyser = context.createAnalyser()
     // Small FFT: we want a responsive level meter, not a spectrum.
     analyser.fftSize = 256
     analyser.smoothingTimeConstant = 0.6
 
-    source.connect(gain)
     gain.connect(analyser)
     if (this.master) gain.connect(this.master)
 
-    // Chromium will not pull from a MediaStreamAudioSourceNode unless the
-    // underlying stream is also consumed by a media element. Muted so it never
-    // double-plays past the gain stage.
-    const sink = new Audio()
-    sink.srcObject = stream
-    sink.muted = true
-    sink.autoplay = true
-    void sink.play().catch(() => undefined)
-    if (this.outputDevice) void this.applySink(sink)
+    const inputs = live.map((stream) => {
+      const source = context.createMediaStreamSource(stream)
+      source.connect(gain)
+
+      // Chromium will not pull from a MediaStreamAudioSourceNode unless the
+      // underlying stream is also consumed by a media element. Muted so it
+      // never double-plays past the gain stage.
+      const sink = new Audio()
+      sink.srcObject = stream
+      sink.muted = true
+      sink.autoplay = true
+      void sink.play().catch(() => undefined)
+      if (this.outputDevice) void this.applySink(sink)
+
+      return { stream, source, sink }
+    })
 
     // Re-apply whatever this peer was already set to.
     const settings = this.peerAudio(peerId)
     gain.gain.value = settings.muted ? 0 : settings.volume
 
     this.channels.set(peerId, {
-      stream,
-      source,
+      inputs,
       gain,
       analyser,
-      buffer: new Float32Array(analyser.fftSize),
-      sink
+      buffer: new Float32Array(analyser.fftSize)
     })
   }
 
@@ -110,13 +141,13 @@ export class AudioMixer {
     const channel = this.channels.get(peerId)
     if (!channel) return
     try {
-      channel.source.disconnect()
+      for (const input of channel.inputs) input.source.disconnect()
       channel.gain.disconnect()
       channel.analyser.disconnect()
     } catch {
       // Already torn down.
     }
-    channel.sink.srcObject = null
+    for (const input of channel.inputs) input.sink.srcObject = null
     this.channels.delete(peerId)
     // Settings deliberately survive: if they start sharing again, they come
     // back at the volume you chose.
@@ -159,7 +190,7 @@ export class AudioMixer {
   async setOutputDevice(deviceId: string): Promise<void> {
     this.outputDevice = deviceId
     for (const channel of this.channels.values()) {
-      await this.applySink(channel.sink)
+      for (const input of channel.inputs) await this.applySink(input.sink)
     }
   }
 
