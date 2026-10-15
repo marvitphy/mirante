@@ -33,6 +33,7 @@ interface NativeModule {
   isSupported: () => boolean
   listAudioApps: () => AudioApp[]
   pidForWindow: (hwnd: number) => number | null
+  executableForPid: (pid: number) => string | null
   ProcessAudioCapture: new (
     pid: number,
     mode: 'IncludeTree' | 'ExcludeTree'
@@ -142,6 +143,39 @@ export interface AudioCapability {
 /** True when per-application capture is usable right now. */
 export function audioAddonReady(): boolean {
   return getAudioCapability().supported
+}
+
+/**
+ * Every audio-producing pid belonging to the same application as `pid`.
+ *
+ * A window and the sound it makes are frequently different processes.
+ * Chrome gives each window a renderer and puts audio in a separate service;
+ * they are siblings, so capturing the window's process TREE records silence
+ * — which is exactly why sharing a Chrome window came through mute. Steam
+ * behaves the same way.
+ *
+ * Matching on the executable finds the sessions that actually belong to the
+ * app the person pointed at.
+ */
+export function audioPidsForApp(pid: number): number[] {
+  const mod = loadNative()
+  if (!mod) return []
+
+  let executable: string | null = null
+  try {
+    executable = mod.executableForPid(pid)
+  } catch {
+    executable = null
+  }
+  if (!executable) return []
+
+  const wanted = executable.toLowerCase()
+  const pids = listAudioApps()
+    .filter((a) => a.executable.toLowerCase() === wanted)
+    .map((a) => a.pid)
+
+  console.log(`[process-audio] ${executable} -> ${pids.length} audio session(s)`)
+  return pids
 }
 
 /** The process that owns a window, or null when it cannot be resolved. */
@@ -263,7 +297,11 @@ export function startProcessAudio(
   const mod = loadNative()
   if (!mod) return null
 
-  const pids = plan.kind === 'process' ? [plan.pid] : listAudioApps().map((a) => a.pid)
+  const pids =
+    plan.kind === 'process'
+      ? // The window's own tree first, then the rest of its application.
+        [...new Set([plan.pid, ...audioPidsForApp(plan.pid)])]
+      : listAudioApps().map((a) => a.pid)
 
   if (pids.length === 0) {
     console.log('[process-audio] nothing playing audio to capture')

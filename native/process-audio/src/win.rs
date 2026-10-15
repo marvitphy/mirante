@@ -273,6 +273,10 @@ pub fn list_audio_apps() -> WinResult<Vec<crate::AudioApp>> {
     }
 }
 
+pub fn executable_for_pid(pid: u32) -> Option<String> {
+    executable_name(pid)
+}
+
 fn executable_name(pid: u32) -> Option<String> {
     // SAFETY: handle is closed on every path; buffer length is passed by pointer
     // and clamped by the API.

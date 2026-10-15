@@ -126,6 +126,27 @@ pub fn pid_for_window(hwnd: i64) -> Option<u32> {
     }
 }
 
+/// The executable that owns a pid, e.g. `"chrome.exe"`.
+///
+/// Needed because a window and the audio it produces are often different
+/// processes: Chrome puts each window in a renderer and its sound in a
+/// separate audio service, which are siblings rather than parent and child.
+/// Capturing the window's process tree therefore records silence. Resolving
+/// the executable lets the caller find the sessions that belong to the same
+/// application instead.
+#[napi]
+pub fn executable_for_pid(pid: u32) -> Option<String> {
+    #[cfg(windows)]
+    {
+        backend::executable_for_pid(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 /// A running capture. Dropping or calling [`ProcessAudioCapture::stop`] releases
 /// the device and joins the capture thread.
 #[napi]

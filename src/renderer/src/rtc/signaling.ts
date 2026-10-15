@@ -36,6 +36,8 @@ const RECONNECT_MAX_MS = 8_000
  * Durable Object at all.
  */
 const PING_INTERVAL_MS = 25_000
+/** A connect attempt that produces no event at all is a dead attempt. */
+const HANDSHAKE_TIMEOUT_MS = 8_000
 
 export class Signaling {
   private socket: WebSocket | null = null
@@ -43,6 +45,15 @@ export class Signaling {
   private closedByUser = false
   private pingTimer: number | null = null
   private reconnectTimer: number | null = null
+  /**
+   * Guards against a socket that neither opens nor fails.
+   *
+   * A WebSocket stuck in CONNECTING fires no event at all, so the UI sat on
+   * "Conectando" forever with nothing in the log after the attempt. The
+   * reconnect ladder only runs on `close`, which never came. Now the attempt
+   * itself has a deadline.
+   */
+  private handshakeTimer: number | null = null
   /** Round-trip time to the signaling server. Not the media path, but a useful floor. */
   private lastRtt = 0
 
@@ -84,7 +95,19 @@ export class Signaling {
     const socket = new WebSocket(url)
     this.socket = socket
 
+    this.handshakeTimer = window.setTimeout(() => {
+      this.handshakeTimer = null
+      if (socket.readyState === WebSocket.CONNECTING) {
+        console.warn(`[signal] no handshake in ${HANDSHAKE_TIMEOUT_MS}ms, retrying`)
+        // Closing a CONNECTING socket fires `close`, which puts us back on
+        // the normal reconnect ladder instead of hanging.
+        socket.close()
+      }
+    }, HANDSHAKE_TIMEOUT_MS)
+
     socket.addEventListener('open', () => {
+      this.clearHandshake()
+      console.log('[signal] socket aberto')
       this.attempt = 0
       this.options.onStatus('open')
       this.send({
@@ -123,7 +146,9 @@ export class Signaling {
       this.options.onMessage(message)
     })
 
-    socket.addEventListener('close', () => {
+    socket.addEventListener('close', (event) => {
+      console.log(`[signal] socket fechou code=${event.code} ${event.reason || ''}`)
+      this.clearHandshake()
       this.stopPing()
       this.socket = null
       if (this.closedByUser) {
@@ -133,7 +158,10 @@ export class Signaling {
       this.scheduleReconnect()
     })
 
-    socket.addEventListener('error', () => socket.close())
+    socket.addEventListener('error', () => {
+      console.warn('[signal] erro no socket')
+      socket.close()
+    })
   }
 
   private scheduleReconnect(): void {
@@ -157,6 +185,13 @@ export class Signaling {
     }, PING_INTERVAL_MS)
   }
 
+  private clearHandshake(): void {
+    if (this.handshakeTimer !== null) {
+      window.clearTimeout(this.handshakeTimer)
+      this.handshakeTimer = null
+    }
+  }
+
   private stopPing(): void {
     if (this.pingTimer !== null) {
       window.clearInterval(this.pingTimer)
@@ -172,6 +207,7 @@ export class Signaling {
 
   close(): void {
     this.closedByUser = true
+    this.clearHandshake()
     this.stopPing()
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer)
