@@ -45,9 +45,22 @@ export interface LinkStats {
   candidateType: string
   /** True when media is going through a TURN relay rather than direct. */
   relayed: boolean
+  /**
+   * Why the encoder is holding back, straight from `qualityLimitationReason`.
+   *
+   * This is the one number that settles an argument the rest of the telemetry
+   * cannot. A soft picture looks identical whether the uplink is full or the
+   * encoder cannot keep up, and the fixes are opposites: more bitrate helps
+   * the first and does nothing at all for the second. Re-streaming a 1080p60
+   * YouTube live is exactly where that distinction stops being academic.
+   *
+   * Only meaningful on a publisher link; a viewer reports 'none'.
+   */
+  limitation: 'none' | 'cpu' | 'bandwidth' | 'other'
 }
 
 export const EMPTY_STATS: LinkStats = {
+  limitation: 'none',
   rttMs: 0,
   bitrate: 0,
   framerate: 0,
@@ -541,6 +554,11 @@ export class PeerLink {
         next.width = (entry.frameWidth as number) ?? next.width
         next.height = (entry.frameHeight as number) ?? next.height
         if (entry.codecId) codecIds.add(entry.codecId as string)
+
+        const reason = entry.qualityLimitationReason as string | undefined
+        if (reason === 'cpu' || reason === 'bandwidth' || reason === 'other') {
+          next.limitation = reason
+        }
       }
       if (entry.type === 'inbound-rtp' && entry.kind === 'video') {
         bytes += (entry.bytesReceived as number) ?? 0

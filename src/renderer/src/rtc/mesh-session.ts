@@ -637,10 +637,19 @@ export class MeshSession {
 
     let worstRtt = 0
     let worstLoss = 0
+    let cpuBound = false
     for (const link of links) {
       const stats = link.stats
       if (stats.rttMs > worstRtt) worstRtt = stats.rttMs
       if (stats.lossRatio > worstLoss) worstLoss = stats.lossRatio
+      if (stats.limitation === 'cpu') cpuBound = true
+    }
+
+    // The encoder, not the link, is the wall. Raising the budget would only
+    // ask a machine that is already behind to do more, so hold where we are.
+    if (cpuBound) {
+      this.healthyStreak = 0
+      return
     }
 
     // No measurement yet — RTT comes from RTCP and takes a few seconds to

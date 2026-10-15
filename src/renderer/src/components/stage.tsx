@@ -180,6 +180,11 @@ export function Stage({
           <Row label="jitter" value={formatMs(stats.jitterMs)} />
           <Row label="codec" value={stats.codec || '—'} />
           <Row
+            label="limite"
+            value={LIMITATION_LABELS[stats.limitation]}
+            warn={stats.limitation === 'cpu'}
+          />
+          <Row
             label="caminho"
             value={stats.relayed ? 'TURN' : stats.candidateType || 'direto'}
             warn={stats.relayed}
@@ -240,6 +245,20 @@ export function Stage({
       )}
     </div>
   )
+}
+
+/**
+ * What is holding the picture back.
+ *
+ * Worth a line of its own because "soft picture" looks the same whether the
+ * uplink is full or the encoder cannot keep up, and the two want opposite
+ * fixes: more bandwidth, or less to encode.
+ */
+const LIMITATION_LABELS: Record<string, string> = {
+  none: 'nenhum',
+  cpu: 'processador',
+  bandwidth: 'banda',
+  other: 'outro'
 }
 
 function Row({
