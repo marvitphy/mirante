@@ -32,6 +32,37 @@ const REJOIN_AFTER_MS = 20_000
 const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
 
 /**
+ * Upload governor.
+ *
+ * A mesh publisher sends one full copy of its screen to every viewer, so the
+ * uplink is the scarce thing — and nothing in WebRTC knows the total: each
+ * PeerConnection runs its own congestion control and happily believes it has
+ * the whole link to itself. Something has to own the sum.
+ *
+ * The old answer was arithmetic: the profile ceiling divided by the viewer
+ * count. That is wrong in both directions at once. On a thin uplink, three
+ * viewers still oversubscribe it; on fibre it pins a single viewer to a
+ * quarter of what the line could carry and never finds out otherwise. Which
+ * is why a game came through as mush.
+ *
+ * This measures instead. It starts deliberately low, raises the budget while
+ * round-trip time and loss stay healthy, and backs off hard the moment they
+ * do not. Climbing slowly and falling fast is the whole trick: buffer bloat
+ * is a cliff, and 19 seconds of it is a far worse outcome than a soft picture.
+ */
+const BUDGET_START = 3_000_000
+const BUDGET_MIN = 1_000_000
+const BUDGET_MAX = 20_000_000
+/** How often the budget is reconsidered. */
+const GOVERNOR_INTERVAL_MS = 3_000
+/** Healthy samples in a row before asking for more. */
+const GOVERNOR_PATIENCE = 2
+const RTT_HEALTHY_MS = 150
+const RTT_STRAINED_MS = 400
+const LOSS_HEALTHY = 0.02
+const LOSS_STRAINED = 0.05
+
+/**
  * Mesh session — the one place that knows the topology.
  *
  * Named after the lesson in docs/teamspeak-rtc-teardown.md §5b: TeamSpeak has
@@ -115,6 +146,10 @@ export class MeshSession {
   private readonly earlyCandidates = new Map<string, RTCIceCandidateInit[]>()
   /** Pending automatic rejoin for a viewer link that will not come back. */
   private readonly rejoinTimers = new Map<string, number>()
+  /** Total uplink the governor is currently willing to use. */
+  private uploadBudget = BUDGET_START
+  private healthyStreak = 0
+  private governorTimer: number | null = null
   private readonly peers = new Map<string, PeerView>()
   private readonly mixer = new AudioMixer()
   private readonly listeners = new Set<Listener>()
@@ -190,10 +225,20 @@ export class MeshSession {
       onMessage: (message) => void this.handle(message)
     })
     this.signaling.connect()
+    this.governorTimer = window.setInterval(
+      () => this.governUpload(),
+      GOVERNOR_INTERVAL_MS
+    )
     this.emit()
   }
 
   disconnect(): void {
+    if (this.governorTimer !== null) {
+      window.clearInterval(this.governorTimer)
+      this.governorTimer = null
+    }
+    this.uploadBudget = BUDGET_START
+    this.healthyStreak = 0
     for (const link of this.allLinks()) link.close()
     this.publishers.clear()
     this.viewers.clear()
@@ -575,6 +620,60 @@ export class MeshSession {
    * call, so they have to be presented together or the later one silences the
    * earlier.
    */
+  /**
+   * Reconsider the uplink budget from measured round-trip time and loss.
+   *
+   * Reads the publisher links, because those are the ones spending our upload.
+   */
+  private governUpload(): void {
+    const links = [...this.publishers.values()]
+    if (links.length === 0) {
+      // Nothing is being sent. Come back at the starting budget rather than
+      // at whatever a bad moment last left behind.
+      this.uploadBudget = BUDGET_START
+      this.healthyStreak = 0
+      return
+    }
+
+    let worstRtt = 0
+    let worstLoss = 0
+    for (const link of links) {
+      const stats = link.stats
+      if (stats.rttMs > worstRtt) worstRtt = stats.rttMs
+      if (stats.lossRatio > worstLoss) worstLoss = stats.lossRatio
+    }
+
+    // No measurement yet — RTT comes from RTCP and takes a few seconds to
+    // show up. Hold, rather than reading silence as good news.
+    if (worstRtt === 0) return
+
+    const strained = worstRtt > RTT_STRAINED_MS || worstLoss > LOSS_STRAINED
+    const healthy = worstRtt < RTT_HEALTHY_MS && worstLoss < LOSS_HEALTHY
+
+    if (strained) {
+      this.healthyStreak = 0
+      this.uploadBudget = Math.max(BUDGET_MIN, Math.round(this.uploadBudget * 0.6))
+    } else if (healthy) {
+      this.healthyStreak++
+      if (this.healthyStreak >= GOVERNOR_PATIENCE) {
+        this.healthyStreak = 0
+        this.uploadBudget = Math.min(BUDGET_MAX, Math.round(this.uploadBudget * 1.25))
+      }
+    } else {
+      this.healthyStreak = 0
+    }
+
+    this.spreadBudget()
+  }
+
+  /** Hand each publisher link its current slice of the budget. */
+  private spreadBudget(): void {
+    const links = [...this.publishers.values()]
+    if (links.length === 0) return
+    const share = this.uploadBudget / links.length
+    for (const link of links) void link.setUploadBudget(share)
+  }
+
   private attachAudio(peer: PeerView): void {
     const streams = AUDIO_SLOTS.map((slot) => peer.streams.get(slot)).filter(
       (stream): stream is MediaStream => stream !== undefined
@@ -611,7 +710,7 @@ export class MeshSession {
     await this.flushCandidates(peerId + ':in', link)
 
     // Everyone's share of the upload just shrank by one.
-    for (const other of this.publishers.values()) other.setViewerCount(this.publishers.size)
+    this.spreadBudget()
 
     await this.syncTracks()
     const offer = await link.createOffer()
@@ -642,7 +741,6 @@ export class MeshSession {
     const mic = this.local.mic?.getAudioTracks()[0] ?? null
 
     for (const link of this.publishers.values()) {
-      link.setViewerCount(this.publishers.size)
       await link.setSlot('screen', screen, this.local.profile)
       await link.setSlot('camera', camera)
       await link.setSlot('screenAudio', screenAudio)

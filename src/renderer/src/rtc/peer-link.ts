@@ -116,6 +116,9 @@ const INTERRUPT_GRACE_MS = 6_000
  * reconnection. The last value repeats for as long as the link is down.
  */
 const RECOVERY_BACKOFF_MS = [4_000, 8_000, 15_000, 30_000]
+
+/** Below this a moving picture stops being worth the bandwidth it costs. */
+const MIN_BUDGET = 500_000
 /** Agreeing samples before the relay badge flips, in either direction. */
 const RELAY_CONFIRMATIONS = 3
 
@@ -134,8 +137,15 @@ export class PeerLink {
   private readonly pc: RTCPeerConnection
   private readonly options: PeerLinkOptions
   private readonly slots = new Map<SlotName, RTCRtpTransceiver>()
-  /** How many viewers share this publisher's upload, for budgeting. */
-  private shareOfUpload = 1
+  /**
+   * Ceiling for this one link, in bits per second, set by the governor.
+   *
+   * Null until the governor has spoken, in which case the profile's own
+   * ceiling applies.
+   */
+  private uploadBudget: number | null = null
+  /** The profile currently applied to the screen sender, for re-application. */
+  private screenProfile: (typeof SCREEN_PROFILES)[ScreenProfileName] | null = null
   /** Candidates that arrive before the remote description is set. */
   private readonly pendingCandidates: RTCIceCandidateInit[] = []
   private statsTimer: number | null = null
@@ -162,6 +172,8 @@ export class PeerLink {
    */
   private lastRtt = 0
   private cursor: StatsCursor | null = null
+  /** The most recent telemetry sample, for anyone who needs it on demand. */
+  private latest: LinkStats = EMPTY_STATS
   private makingOffer = false
   private closed = false
 
@@ -347,8 +359,12 @@ export class PeerLink {
     }
 
     if (track) {
-      if (name === 'screen') await this.applyShared(sender, SCREEN_PROFILES[screenProfile])
-      else if (name === 'camera') await this.applyShared(sender, CAMERA_PROFILE)
+      if (name === 'screen') {
+        this.screenProfile = SCREEN_PROFILES[screenProfile]
+        await this.applyShared(sender, this.screenProfile)
+      } else if (name === 'camera') {
+        await this.applyShared(sender, CAMERA_PROFILE)
+      }
     }
     return true
   }
@@ -360,24 +376,42 @@ export class PeerLink {
    * profile's ceiling is a per-viewer figure that must be divided or three
    * friends will ask for three times the bandwidth one person has.
    */
-  setViewerCount(count: number): void {
-    this.shareOfUpload = Math.max(1, count)
+  /** Most recent telemetry for this link. */
+  get stats(): LinkStats {
+    return this.latest
+  }
+
+  /**
+   * Set this link's share of the uplink, in bits per second.
+   *
+   * Replaces dividing the profile ceiling by the viewer count, which was a
+   * guess in both directions at once: too much for someone on a thin
+   * connection, and permanently too little for someone on fibre, since it
+   * could only ever go down. The governor measures instead.
+   */
+  async setUploadBudget(bitsPerSecond: number): Promise<void> {
+    const next = Math.max(MIN_BUDGET, Math.round(bitsPerSecond))
+    if (this.uploadBudget === next) return
+    this.uploadBudget = next
+
+    const sender = this.slots.get('screen')?.sender
+    if (sender?.track && this.screenProfile) await this.applyShared(sender, this.screenProfile)
   }
 
   private async applyShared(
     sender: RTCRtpSender,
     profile: (typeof SCREEN_PROFILES)[ScreenProfileName] | typeof CAMERA_PROFILE
   ): Promise<void> {
-    // Never below 400 kbit/s: past that the picture stops being useful and
-    // you may as well not send it.
-    const budget = Math.max(400_000, Math.round(profile.maxBitrate / this.shareOfUpload))
-    await applyProfile(sender, { ...profile, maxBitrate: budget })
+    // The profile is the ceiling; the governor can only ask for less.
+    const budget = Math.min(profile.maxBitrate, this.uploadBudget ?? profile.maxBitrate)
+    await applyProfile(sender, { ...profile, maxBitrate: Math.max(MIN_BUDGET, budget) })
   }
 
   /** Re-apply a quality profile to the live screen sender without renegotiating. */
   async setScreenProfile(profile: ScreenProfileName): Promise<void> {
+    this.screenProfile = SCREEN_PROFILES[profile]
     const sender = this.slots.get('screen')?.sender
-    if (sender?.track) await this.applyShared(sender, SCREEN_PROFILES[profile])
+    if (sender?.track) await this.applyShared(sender, this.screenProfile)
   }
 
   /**
@@ -583,6 +617,7 @@ export class PeerLink {
     else next.rttMs = this.lastRtt
 
     this.cursor = { bytes, packets, lost, frames, at: now }
+    this.latest = next
     this.options.onStats(next)
   }
 

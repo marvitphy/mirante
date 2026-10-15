@@ -14,7 +14,7 @@ import { getSettings, listDevices, useSettings } from './lib/settings'
 import { useAutoHide } from './lib/use-auto-hide'
 import { useHotkeys } from './lib/use-hotkeys'
 import { createPcmTrack, type PcmTrackHandle } from './rtc/pcm-track'
-import { CAPTURE_CONSTRAINTS, type ScreenProfileName } from './rtc/sdp'
+import { captureConstraints, type ScreenProfileName } from './rtc/sdp'
 import { session, useSession } from './rtc/use-session'
 
 /** Replaced at build time from MIRANTE_SIGNAL_URL — see electron.vite.config.ts. */
@@ -145,7 +145,9 @@ export function App(): JSX.Element {
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({
-        video: CAPTURE_CONSTRAINTS,
+        // Capture at the frame rate the chosen profile promises — asking for
+        // 30 while the profile advertises 60 halves a game before encoding.
+        video: captureConstraints(getSettings().defaultProfile),
         // We supply audio ourselves as PCM; asking Chromium for it too and
         // receiving none makes some builds reject the whole request.
         audio: false

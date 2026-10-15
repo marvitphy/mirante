@@ -82,24 +82,38 @@ export interface EncodingProfile {
  * pays for EVERY viewer. Three viewers at 4 Mbit/s is already 12 Mbit/s up.
  * These numbers leave headroom on purpose.
  */
+/**
+ * Per-stream ceilings.
+ *
+ * These are ceilings, not targets. What a stream actually gets is decided at
+ * runtime by the upload governor in MeshSession, which starts low and raises
+ * the budget only while measured round-trip time and loss stay healthy. That
+ * is what makes a generous ceiling safe: the old static numbers had to be
+ * timid, because nothing was watching and a number too high just drowned the
+ * uplink — 19 seconds of buffer bloat, in the case that taught us this.
+ *
+ * Timid has its own cost, which is what a game stream looks like at 1.3
+ * Mbit/s. With a governor in front, the ceiling can be what the content
+ * deserves when the link can carry it.
+ */
 export const SCREEN_PROFILES = {
   /** Reading code or text. Detail over motion. */
   crisp: {
-    maxBitrate: 2_500_000,
+    maxBitrate: 6_000_000,
     maxFramerate: 30,
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail'
   },
   /** Games and video. Motion over detail. */
   smooth: {
-    maxBitrate: 4_000_000,
+    maxBitrate: 8_000_000,
     maxFramerate: 60,
     degradationPreference: 'maintain-framerate',
     contentHint: 'motion'
   },
   /** A weak link, a full mesh, or anything going through a relay. */
   thrifty: {
-    maxBitrate: 1_000_000,
+    maxBitrate: 1_500_000,
     maxFramerate: 24,
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail'
@@ -109,17 +123,25 @@ export const SCREEN_PROFILES = {
 export type ScreenProfileName = keyof typeof SCREEN_PROFILES
 
 /**
- * Capture ceiling.
+ * Capture ceiling for a given profile.
  *
  * Capping at the source matters more than capping the encoder: a 1440p60
- * capture squeezed into 4 Mbit/s looks far worse than a 1080p30 capture at
- * the same bitrate, and burns more CPU to produce. Text stays readable
- * because 1080p is still plenty for a shared screen.
+ * capture squeezed into a few Mbit/s looks far worse than a 1080p capture at
+ * the same bitrate, and burns more CPU to produce. 1080p is still plenty for
+ * a shared screen, so the resolution ceiling does not move.
+ *
+ * The frame rate does. It used to ask for `ideal: 30` for everyone, including
+ * the profile whose entire promise is 60 — Chromium honours `ideal`, so
+ * "Fluido · 60 fps" captured 30 and no amount of bandwidth could fix it. A
+ * game shared that way is halved before the encoder ever sees it.
  */
-export const CAPTURE_CONSTRAINTS: MediaTrackConstraints = {
-  width: { max: 1920 },
-  height: { max: 1080 },
-  frameRate: { ideal: 30, max: 60 }
+export function captureConstraints(profile: ScreenProfileName): MediaTrackConstraints {
+  const fps = SCREEN_PROFILES[profile].maxFramerate
+  return {
+    width: { max: 1920 },
+    height: { max: 1080 },
+    frameRate: { ideal: fps, max: fps }
+  }
 }
 
 export const CAMERA_PROFILE: EncodingProfile = {
