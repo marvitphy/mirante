@@ -33,16 +33,47 @@ jobs:
           echo "::error::MIRANTE_SIGNAL_URL is not set. A release built without it points at ws://localhost:8787, which exists on nobody else's machine — the installer would be dead on arrival. Set it under Settings -> Secrets and variables -> Actions -> Variables."
           exit 1
 
+      # Electron and electron-builder each download a large toolchain on first
+      # use, and on a fresh Windows runner that is most of `npm ci`. They are
+      # keyed by the versions in the lockfile, so the cache only misses when
+      # one of them actually changes.
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
       - name: Install
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --fund=false
 
       - name: Generate icon
         run: npm run icon
 
+      # The addon is a Rust build that takes about a minute, and almost no
+      # release touches Rust. Keyed on the sources themselves, so it rebuilds
+      # exactly when it must and is restored in seconds otherwise.
+      - name: Cache the audio addon
+        id: addon-cache
+        uses: actions/cache@v4
+        with:
+          path: native/process-audio/*.node
+          key: >-
+            addon-${{ runner.os }}-${{ hashFiles(
+              'native/process-audio/src/**',
+              'native/process-audio/Cargo.toml',
+              'native/process-audio/Cargo.lock',
+              'native/process-audio/package.json'
+            ) }}
+
       - name: Rust toolchain
+        if: steps.addon-cache.outputs.cache-hit != 'true'
         run: rustup default stable
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.addon-cache.outputs.cache-hit != 'true'
         with:
           workspaces: native/process-audio
 
@@ -50,12 +81,15 @@ jobs:
       # voices out of your broadcast. Required: a release without it silently
       # loses the feature, and nobody would notice until the echo showed up.
       - name: Build per-application audio addon
+        if: steps.addon-cache.outputs.cache-hit != 'true'
         working-directory: native/process-audio
         run: |
-          npm install
+          npm install --prefer-offline --no-audit --fund=false
           npm run build
 
       - name: Verify the addon is there
+        # Runs on a cache hit too: this is exactly where a cache that restored
+        # nothing has to be caught, not three minutes later in the installer.
         working-directory: native/process-audio
         run: |
           if (-not (Test-Path *.node)) { throw "no .node produced" }
