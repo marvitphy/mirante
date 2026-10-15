@@ -64,10 +64,16 @@
   transform: translateY(0);
 }
 
-/* Sits above the rail, which occupies the very bottom of the stage. */
+/* Sits above the rail when the rail is a bar along the bottom. With the rail
+   in its own column to the right — the default — there is nothing down there,
+   so the controls belong on the floor of the picture. Left high they read as
+   stranded in the middle of the video. */
 .tm-stage__bottom {
   bottom: var(--rail-h);
   transform: translateY(8px);
+}
+.tm-shell--rail-right .tm-stage__bottom {
+  bottom: 0;
 }
 .tm-stage__bottom[data-visible='true'] {
   transform: translateY(0);
@@ -110,16 +116,48 @@
   flex: 0 0 auto;
 }
 
-/* Each control carries its own plate.
-   A full-width gradient was invisible over dark video and a glaring grey
-   curtain over light video — and since you cannot know what someone is
-   sharing, the only safe backdrop is one that covers just the controls.
-   Discrete plates also match the rest of the interface, where everything is
-   a bordered rectangle rather than a wash. */
+/* Each control carries its own plate, and the whole row sits on a scrim.
+   The plate alone was not enough: a bordered rectangle dropped onto bright
+   video has no relationship to anything around it, so the row read as loose
+   pieces scattered over the picture. The scrim is a short gradient — dark,
+   never grey — that darkens only the strip the controls occupy and is fully
+   transparent a few rows of pixels later. It is the same thing every video
+   player does, for the same reason: it gives the controls ground to stand on
+   without curtaining the content. */
+.tm-stage__top::before,
+.tm-stage__bottom::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 148%;
+  z-index: -1;
+  pointer-events: none;
+}
+.tm-stage__top::before {
+  top: 0;
+  background: linear-gradient(
+    to bottom,
+    hsl(258 45% 1% / 0.72),
+    hsl(258 45% 1% / 0.34) 55%,
+    transparent
+  );
+}
+.tm-stage__bottom::before {
+  bottom: 0;
+  background: linear-gradient(
+    to top,
+    hsl(258 45% 1% / 0.78),
+    hsl(258 45% 1% / 0.36) 55%,
+    transparent
+  );
+}
+
 .tm-stage__top > *:not(.tm-stage__spacer),
 .tm-stage__bottom > *:not(.tm-stage__spacer) {
   background: hsl(258 40% 2% / 0.88);
   border: 1px solid var(--rule);
+  box-shadow: var(--shadow-plate);
 }
 
 .tm-stage__identity {
@@ -188,6 +226,7 @@
   padding: var(--s-3) var(--s-4);
   background: hsl(258 30% 5% / 0.94);
   border: 1px solid var(--rule);
+  box-shadow: var(--shadow-pop);
   animation: tm-rise var(--t-pop) var(--ease-out);
 }
 

@@ -273,6 +273,25 @@ export class MeshSession {
           peer.link = 'closed'
           if (this.focused === message.id) this.focused = null
         }
+        // A slot that is switched off keeps its transceiver and its track —
+        // that is the whole point of fixed slots, and why turning a camera off
+        // no longer interrupts the screen share. But the track stops producing
+        // frames, so a <video> still bound to it freezes on black. The
+        // announced state is the only authority on what is actually live, so
+        // the visible handles follow it: cleared when the slot goes quiet,
+        // restored from the cached stream when it comes back. No renegotiation
+        // either way.
+        if (!message.state.screen) peer.screen = null
+        else peer.screen ??= peer.streams.get('screen') ?? null
+
+        if (!message.state.camera) peer.camera = null
+        else peer.camera ??= peer.streams.get('camera') ?? null
+
+        // Nothing left to look at — don't hold the stage on an empty picture.
+        if (this.focused === message.id && !peer.screen && !peer.camera) {
+          this.focused = null
+        }
+
         // Auto-promote the first screen share to the stage. Nobody should have
         // to hunt for the thing they came to watch.
         if (message.state.screen && this.focused === null) this.focused = message.id

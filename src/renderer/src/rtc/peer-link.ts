@@ -95,8 +95,27 @@ const SLOTS: Array<{ name: SlotName; kind: 'video' | 'audio' }> = [
 ]
 
 const STATS_INTERVAL_MS = 1_000
-/** How long a dip must persist before the user is told about it. */
-const INTERRUPT_GRACE_MS = 2_000
+/**
+ * How long a dip must persist before the user is told about it.
+ *
+ * ICE declares `disconnected` after a couple of missed consent checks, which
+ * a perfectly ordinary Wi-Fi hiccup produces several times an hour. At two
+ * seconds the banner was firing on dips that had already healed — "Reconectando"
+ * appearing out of nowhere over a picture that never stopped. Six seconds is
+ * past the noise and still well short of the ~15s Chromium takes to give up.
+ */
+const INTERRUPT_GRACE_MS = 6_000
+
+/**
+ * Retry schedule for ICE restarts, in milliseconds.
+ *
+ * `iceconnectionstatechange` fires once per transition, so a restart triggered
+ * by `failed` got exactly one attempt: if that offer was lost, or the answer
+ * never came, the link stayed dead and the banner stayed up forever. Retrying
+ * on a timer with backoff is what turns "Reconectando" into an actual
+ * reconnection. The last value repeats for as long as the link is down.
+ */
+const RECOVERY_BACKOFF_MS = [4_000, 8_000, 15_000, 30_000]
 /** Agreeing samples before the relay badge flips, in either direction. */
 const RELAY_CONFIRMATIONS = 3
 
@@ -128,6 +147,9 @@ export class PeerLink {
    * "Reconnecting" strobe at people while the picture never actually stops.
    */
   private interruptTimer: number | null = null
+  /** Scheduled ICE restart while the path is down. */
+  private recoveryTimer: number | null = null
+  private recoveryAttempt = 0
   /** Consecutive samples agreeing the path is relayed. */
   private relaySamples = 0
   /**
@@ -179,6 +201,7 @@ export class PeerLink {
       // symbol exist to serve.
       if (this.pc.iceConnectionState === 'failed' && this.role === 'publisher') {
         void this.restartIce()
+        this.scheduleRecovery()
       }
       this.reportState()
     })
@@ -193,21 +216,58 @@ export class PeerLink {
     }
   }
 
+  private clearRecovery(): void {
+    if (this.recoveryTimer !== null) {
+      window.clearTimeout(this.recoveryTimer)
+      this.recoveryTimer = null
+    }
+    this.recoveryAttempt = 0
+  }
+
+  /**
+   * Keep trying to rebuild the path until it comes back or the link closes.
+   *
+   * Only the publisher does this: an ICE restart is an offer, and having both
+   * ends offer at once is glare. The viewer's recovery is the restart its
+   * publisher performs.
+   */
+  private scheduleRecovery(): void {
+    if (this.closed || this.role !== 'publisher' || this.recoveryTimer !== null) return
+
+    const index = Math.min(this.recoveryAttempt, RECOVERY_BACKOFF_MS.length - 1)
+    const delay = RECOVERY_BACKOFF_MS[index]
+    this.recoveryAttempt++
+
+    this.recoveryTimer = window.setTimeout(() => {
+      this.recoveryTimer = null
+      if (this.closed) return
+      if (this.pc.connectionState === 'connected') return
+
+      console.warn(`[rtc] ${this.peerId}: tentativa ${this.recoveryAttempt} de reconexao`)
+      void this.restartIce()
+      this.scheduleRecovery()
+    }, delay)
+  }
+
   private reportState(): void {
     if (this.closed) return
     switch (this.pc.connectionState) {
       case 'connected':
         this.clearInterrupt()
+        this.clearRecovery()
         this.options.onState('live')
         break
 
       case 'disconnected':
         // Hold the bad news. Most of these recover before anyone could have
         // read the message, and a notice that flickers is worse than none.
+        // Repair starts straight away regardless — the grace period is about
+        // what to SAY, not about what to do.
+        this.scheduleRecovery()
         if (this.interruptTimer === null) {
           this.interruptTimer = window.setTimeout(() => {
             this.interruptTimer = null
-            if (!this.closed && this.pc.connectionState === 'disconnected') {
+            if (!this.closed && this.pc.connectionState !== 'connected') {
               this.options.onState('interrupted')
             }
           }, INTERRUPT_GRACE_MS)
@@ -215,13 +275,16 @@ export class PeerLink {
         break
 
       case 'failed':
-        // Failed does not recover on its own; say so immediately.
+        // Failed does not heal by itself, so this one is immediate — and it
+        // keeps retrying rather than restarting once and hoping.
         this.clearInterrupt()
         this.options.onState('interrupted')
+        this.scheduleRecovery()
         break
 
       case 'closed':
         this.clearInterrupt()
+        this.clearRecovery()
         this.options.onState('closed')
         break
 
@@ -528,6 +591,7 @@ export class PeerLink {
     this.closed = true
     if (this.statsTimer !== null) window.clearInterval(this.statsTimer)
     this.clearInterrupt()
+    this.clearRecovery()
     this.slots.clear()
     this.pc.close()
     this.options.onState('closed')
