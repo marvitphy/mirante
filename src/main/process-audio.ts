@@ -146,36 +146,24 @@ export function audioAddonReady(): boolean {
 }
 
 /**
- * Every audio-producing pid belonging to the same application as `pid`.
+ * The executable that owns a pid, e.g. `"chrome.exe"`.
  *
- * A window and the sound it makes are frequently different processes.
- * Chrome gives each window a renderer and puts audio in a separate service;
- * they are siblings, so capturing the window's process TREE records silence
- * — which is exactly why sharing a Chrome window came through mute. Steam
- * behaves the same way.
+ * A window and the sound it makes are frequently different processes. Chrome
+ * gives each window a renderer and puts audio in a separate service; they are
+ * siblings, so capturing the window's process TREE records silence — which is
+ * why sharing a Chrome window came through mute. Steam behaves the same way.
  *
- * Matching on the executable finds the sessions that actually belong to the
- * app the person pointed at.
+ * The executable is the only thing the two have in common, so it is what we
+ * follow.
  */
-export function audioPidsForApp(pid: number): number[] {
+export function executableForPid(pid: number): string | null {
   const mod = loadNative()
-  if (!mod) return []
-
-  let executable: string | null = null
+  if (!mod) return null
   try {
-    executable = mod.executableForPid(pid)
+    return mod.executableForPid(pid) ?? null
   } catch {
-    executable = null
+    return null
   }
-  if (!executable) return []
-
-  const wanted = executable.toLowerCase()
-  const pids = listAudioApps()
-    .filter((a) => a.executable.toLowerCase() === wanted)
-    .map((a) => a.pid)
-
-  console.log(`[process-audio] ${executable} -> ${pids.length} audio session(s)`)
-  return pids
 }
 
 /** The process that owns a window, or null when it cannot be resolved. */
@@ -258,8 +246,34 @@ interface Source {
   offset: number
 }
 
-let sources: Source[] = []
+/**
+ * What we are trying to hear, as a rule rather than a list of pids.
+ *
+ * Pids are the wrong thing to hold on to. `listAudioApps` can only see a
+ * process that ALREADY has an audio session open, and applications open and
+ * close those constantly — Chrome creates one when a tab starts playing and
+ * drops it when the tab goes quiet. Deciding the set once, at the moment
+ * someone pressed share, meant that sharing a Chrome window while it happened
+ * to be silent captured nothing and stayed that way forever: viewers saw the
+ * picture and heard nothing, with no way back short of restarting the share.
+ *
+ * So we keep the intent and re-resolve it on a timer.
+ */
+interface AudioTarget {
+  kind: 'process' | 'everything'
+  /** For `process`: the application to follow, whatever pids it spawns. */
+  executable: string | null
+  /** For `process`: the window's own tree, used when the app cannot be named. */
+  seedPid: number | null
+}
+
+/** How often the set of captured processes is reconciled with reality. */
+const RESCAN_INTERVAL_MS = 2_000
+
+const sources = new Map<number, Source>()
+let target: AudioTarget | null = null
 let mixTimer: NodeJS.Timeout | null = null
+let rescanTimer: NodeJS.Timeout | null = null
 
 /** Pull up to `count` samples from one source, zero-filling what it lacks. */
 function drain(source: Source, out: Float32Array, count: number): void {
@@ -277,15 +291,85 @@ function drain(source: Source, out: Float32Array, count: number): void {
   }
 }
 
+/** The pids we want captured right now, resolved fresh every time. */
+function desiredPids(): number[] {
+  if (!target) return []
+
+  const playing = listAudioApps()
+
+  if (target.kind === 'everything') return playing.map((a) => a.pid)
+
+  if (target.executable) {
+    const wanted = target.executable.toLowerCase()
+    return playing.filter((a) => a.executable.toLowerCase() === wanted).map((a) => a.pid)
+  }
+
+  // The application could not be named, so the window's own process tree is
+  // the best guess left. It is also the pre-Chrome behaviour, which is right
+  // for every single-process application.
+  return target.seedPid === null ? [] : [target.seedPid]
+}
+
+function openCapture(mod: NativeModule, pid: number): void {
+  try {
+    const capture = new mod.ProcessAudioCapture(pid, 'IncludeTree')
+    const source: Source = { capture, queue: [], offset: 0 }
+    capture.start((chunk) => {
+      source.queue.push(
+        new Float32Array(
+          chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+        )
+      )
+      // Never let one stalled consumer grow without bound.
+      while (source.queue.length > 64) source.queue.shift()
+    })
+    sources.set(pid, source)
+    console.log(`[process-audio] capturando pid ${pid} (${sources.size} no total)`)
+  } catch (error) {
+    // One app refusing capture must not sink the rest.
+    console.warn(`[process-audio] cannot capture pid ${pid}:`, (error as Error).message)
+  }
+}
+
+function closeCapture(pid: number): void {
+  const source = sources.get(pid)
+  if (!source) return
+  sources.delete(pid)
+  try {
+    source.capture.stop()
+  } catch (error) {
+    console.error('[process-audio] stop failed:', error)
+  }
+}
+
+/** Bring the open captures in line with what is playing right now. */
+function rescan(): void {
+  const mod = loadNative()
+  if (!mod) return
+
+  const wanted = new Set(desiredPids())
+
+  for (const pid of [...sources.keys()]) {
+    if (!wanted.has(pid)) closeCapture(pid)
+  }
+  for (const pid of wanted) {
+    if (!sources.has(pid)) openCapture(mod, pid)
+  }
+}
+
 /**
- * Start streaming PCM for `choice` to the renderer, which turns it back into a
+ * Start streaming PCM to the renderer, which turns it back into a
  * MediaStreamTrack. Returns the stream format, or null when unavailable.
  *
- * For `everything`, one capture is opened per allowed process and their
- * buffers are summed here. They all read the same render endpoint, so they
- * share its clock and arrive in lockstep — no resampling, no drift
- * correction. A process that falls behind contributes silence for that tick
- * rather than stalling the mix.
+ * One capture is opened per allowed process and their buffers are summed
+ * here. They all read the same render endpoint, so they share its clock and
+ * arrive in lockstep — no resampling, no drift correction. A process that
+ * falls behind contributes silence for that tick rather than stalling the mix.
+ *
+ * The format is returned even when nothing is playing yet. The track has to
+ * exist from the start of the share: if it only appeared once sound did, the
+ * audio would never arrive at all in the ordinary case of opening the video
+ * AFTER starting to share.
  */
 export function startProcessAudio(
   window: BrowserWindow,
@@ -297,44 +381,27 @@ export function startProcessAudio(
   const mod = loadNative()
   if (!mod) return null
 
-  const pids =
-    plan.kind === 'process'
-      ? // The window's own tree first, then the rest of its application.
-        [...new Set([plan.pid, ...audioPidsForApp(plan.pid)])]
-      : listAudioApps().map((a) => a.pid)
-
-  if (pids.length === 0) {
-    console.log('[process-audio] nothing playing audio to capture')
-    return null
-  }
-
-  for (const pid of pids) {
-    try {
-      const capture = new mod.ProcessAudioCapture(pid, 'IncludeTree')
-      const source: Source = { capture, queue: [], offset: 0 }
-      capture.start((chunk) => {
-        source.queue.push(
-          new Float32Array(
-            chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
-          )
-        )
-        // Never let one stalled consumer grow without bound.
-        while (source.queue.length > 64) source.queue.shift()
-      })
-      sources.push(source)
-    } catch (error) {
-      // One app refusing capture must not sink the rest.
-      console.warn(`[process-audio] cannot capture pid ${pid}:`, (error as Error).message)
+  if (plan.kind === 'process') {
+    const executable = executableForPid(plan.pid)
+    if (executable && carriesVoices(executable)) {
+      // Sharing a voice app's own window. Capturing it would broadcast the
+      // very voices the per-process design exists to keep out.
+      console.log(`[process-audio] ${executable} carrega vozes; sem audio`)
+      return null
     }
+    target = { kind: 'process', executable, seedPid: plan.pid }
+    console.log(`[process-audio] seguindo ${executable ?? 'pid ' + plan.pid}`)
+  } else {
+    target = { kind: 'everything', executable: null, seedPid: null }
   }
 
-  if (sources.length === 0) return null
-  console.log(`[process-audio] mixing ${sources.length} app(s)`)
+  rescan()
+  rescanTimer = setInterval(rescan, RESCAN_INTERVAL_MS)
 
   mixTimer = setInterval(() => {
     if (window.isDestroyed()) return
     const mixed = new Float32Array(MIX_FRAMES)
-    for (const source of sources) drain(source, mixed, MIX_FRAMES)
+    for (const source of sources.values()) drain(source, mixed, MIX_FRAMES)
     // Clip rather than wrap: summed streams can exceed unity.
     for (let i = 0; i < mixed.length; i++) {
       mixed[i] = mixed[i] > 1 ? 1 : mixed[i] < -1 ? -1 : mixed[i]
@@ -350,14 +417,12 @@ export function stopProcessAudio(): void {
     clearInterval(mixTimer)
     mixTimer = null
   }
-  for (const source of sources) {
-    try {
-      source.capture.stop()
-    } catch (error) {
-      console.error('[process-audio] stop failed:', error)
-    }
+  if (rescanTimer) {
+    clearInterval(rescanTimer)
+    rescanTimer = null
   }
-  sources = []
+  for (const pid of [...sources.keys()]) closeCapture(pid)
+  target = null
 }
 
 export function registerProcessAudio(window: BrowserWindow): void {
