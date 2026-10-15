@@ -21,6 +21,14 @@ import { SCREEN_PROFILES, setContentHint, type ScreenProfileName } from './sdp'
 import { Signaling, type SignalingStatus } from './signaling'
 
 /**
+ * How long a viewer link may stay down before we rebuild it from scratch.
+ *
+ * Long enough for the publisher's ICE restarts to land first — rebuilding is
+ * a visible interruption, restarting is not.
+ */
+const REJOIN_AFTER_MS = 20_000
+
+/**
  * Mesh session — the one place that knows the topology.
  *
  * Named after the lesson in docs/teamspeak-rtc-teardown.md §5b: TeamSpeak has
@@ -102,6 +110,8 @@ export class MeshSession {
    * ones we will ever get.
    */
   private readonly earlyCandidates = new Map<string, RTCIceCandidateInit[]>()
+  /** Pending automatic rejoin for a viewer link that will not come back. */
+  private readonly rejoinTimers = new Map<string, number>()
   private readonly peers = new Map<string, PeerView>()
   private readonly mixer = new AudioMixer()
   private readonly listeners = new Set<Listener>()
@@ -205,6 +215,7 @@ export class MeshSession {
   }
 
   private dropLinks(peerId: string): void {
+    this.cancelRejoin(peerId)
     this.publishers.get(peerId)?.close()
     this.viewers.get(peerId)?.close()
     this.publishers.delete(peerId)
@@ -262,6 +273,7 @@ export class MeshSession {
 
         if (!wasPublishing && nowPublishing) this.requestStream(message.id)
         if (wasPublishing && !nowPublishing) {
+          this.cancelRejoin(message.id)
           this.viewers.get(message.id)?.close()
           this.viewers.delete(message.id)
           this.earlyCandidates.delete(message.id + ':out')
@@ -464,6 +476,10 @@ export class MeshSession {
         const peer = this.peers.get(peerId)
         if (!peer || peer.link === state) return
         peer.link = state
+        if (role === 'viewer') {
+          if (state === 'interrupted') this.scheduleRejoin(peerId)
+          else this.cancelRejoin(peerId)
+        }
         this.emit()
       },
       onStats: (stats) => {
@@ -502,7 +518,53 @@ export class MeshSession {
   }
 
   /** Ask `peerId` to send us their stream. */
+  /**
+   * Last resort for a viewer link that stays down: ask for the stream again.
+   *
+   * An ICE restart is the publisher's to make, so a viewer whose link dies has
+   * nothing of its own to try — which is why the only cure used to be leaving
+   * the room and coming back. This is that rejoin, performed automatically:
+   * drop the dead link and send a fresh `join`, which makes the publisher
+   * build a new connection from scratch.
+   *
+   * The delay is long enough that an ICE restart gets to finish first. This
+   * should almost never be the thing that fixes it.
+   */
+  private scheduleRejoin(peerId: string): void {
+    if (this.rejoinTimers.has(peerId)) return
+
+    const timer = window.setTimeout(() => {
+      this.rejoinTimers.delete(peerId)
+      const peer = this.peers.get(peerId)
+      if (!peer || peer.link === 'live' || peer.link === 'closed') return
+      if (!peer.state.screen && !peer.state.camera && !peer.state.mic) return
+
+      console.warn(`[rtc] ${peerId}: link nao voltou, pedindo o stream de novo`)
+      this.viewers.get(peerId)?.close()
+      this.viewers.delete(peerId)
+      this.earlyCandidates.delete(peerId + ':out')
+      this.mixer.detach(peerId)
+      peer.audible = false
+      peer.streams.clear()
+      peer.screen = null
+      peer.camera = null
+      peer.link = 'connecting'
+      this.emit()
+      this.requestStream(peerId)
+    }, REJOIN_AFTER_MS)
+
+    this.rejoinTimers.set(peerId, timer)
+  }
+
+  private cancelRejoin(peerId: string): void {
+    const timer = this.rejoinTimers.get(peerId)
+    if (timer === undefined) return
+    window.clearTimeout(timer)
+    this.rejoinTimers.delete(peerId)
+  }
+
   private requestStream(peerId: string): void {
+    this.cancelRejoin(peerId)
     this.mixer.resume()
     this.signaling?.send({ t: 'join', to: peerId })
   }
