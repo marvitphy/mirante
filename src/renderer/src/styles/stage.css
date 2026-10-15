@@ -266,3 +266,16 @@
   line-height: 1.6;
   color: var(--text-muted);
 }
+
+/* Whose volume this is. Without it the slider is an orphan control. */
+.tm-stage__volume {
+  gap: var(--s-3);
+}
+.tm-stage__volume-who {
+  flex: 0 0 auto;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}

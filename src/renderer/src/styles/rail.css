@@ -302,14 +302,45 @@
 }
 
 .tm-signal__read {
+  /* Reserved width, right aligned, tabular digits. A readout whose width
+     tracks its content is a readout that shoves its neighbours around every
+     time the number changes — and telemetry changes once a second. */
+  min-width: 7ch;
+  text-align: right;
   font-size: var(--text-nano);
+  font-variant-numeric: tabular-nums;
   letter-spacing: var(--tracking-mono);
   color: var(--text-tertiary);
 }
 
 .tm-signal__relay {
-  margin-left: 4px;
+  flex: 0 0 auto;
   padding: 0 3px;
-  border: 1px solid var(--accent-edge);
+  border: 1px solid transparent;
+  color: transparent;
+  font-size: var(--text-nano);
+  /* Occupies its slot whether lit or not — see signal-meter.tsx. */
+  visibility: visible;
+  transition: color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out);
+}
+.tm-signal__relay.is-on {
+  border-color: var(--accent-edge);
   color: var(--accent);
+}
+
+/* The self tile's mic is a control. Make it read like one. */
+.tm-tile__slot--button {
+  cursor: pointer;
+  border: 1px solid transparent;
+  padding: 0 2px;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+.tm-tile__slot--button:hover {
+  color: var(--text-primary);
+  border-color: var(--rule);
+}
+.tm-tile__slot--button.is-off {
+  color: var(--tally);
 }

@@ -67,10 +67,18 @@ export function SignalMeter({ stats, live, variant = 'bar' }: SignalMeterProps):
         ))}
       </div>
       {variant === 'inline' && (
-        <span className="tm-signal__read num">
-          {formatMs(stats.rttMs)}
-          {stats.relayed && <span className="tm-signal__relay" title="via TURN">R</span>}
-        </span>
+        <>
+          <span className="tm-signal__read num">{formatMs(stats.rttMs)}</span>
+          {/* Always present, only visible while relaying: a badge that comes
+              and goes would reflow the row every time ICE changes its mind. */}
+          <span
+            className={`tm-signal__relay${stats.relayed ? ' is-on' : ''}`}
+            title={stats.relayed ? 'via retransmissor (TURN)' : 'conexao direta'}
+            aria-hidden={!stats.relayed}
+          >
+            R
+          </span>
+        </>
       )}
     </div>
   )

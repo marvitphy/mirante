@@ -7,7 +7,8 @@ import {
   IconLeave,
   IconMic,
   IconMicOff,
-  IconScreen
+  IconScreen,
+  IconSettings
 } from './icons'
 import { UpdateBadge } from './update-badge'
 
@@ -29,6 +30,7 @@ interface ControlDockProps {
   onToggleMic: () => void
   onProfile: (profile: ScreenProfileName) => void
   onLeave: () => void
+  onSettings: () => void
 }
 
 const PROFILE_LABELS: Record<ScreenProfileName, { name: string; hint: string }> = {
@@ -46,7 +48,8 @@ export function ControlDock({
   onToggleCamera,
   onToggleMic,
   onProfile,
-  onLeave
+  onLeave,
+  onSettings
 }: ControlDockProps): JSX.Element {
   return (
     <div className="tm-dock">
@@ -100,6 +103,15 @@ export function ControlDock({
       )}
 
       <div className="tm-dock__spacer" />
+
+      <button
+        type="button"
+        className="tm-pill tm-pill--lone"
+        onClick={onSettings}
+        title="Configurações"
+      >
+        <IconSettings size={16} />
+      </button>
 
       <UpdateBadge />
 

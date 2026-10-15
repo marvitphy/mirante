@@ -45,6 +45,7 @@ export class AudioMixer {
    */
   private readonly settings = new Map<string, PeerAudio>()
   private masterVolume = 1
+  private outputDevice = ''
 
   /**
    * Must be called from a user gesture the first time, or the AudioContext
@@ -89,6 +90,7 @@ export class AudioMixer {
     sink.muted = true
     sink.autoplay = true
     void sink.play().catch(() => undefined)
+    if (this.outputDevice) void this.applySink(sink)
 
     // Re-apply whatever this peer was already set to.
     const settings = this.peerAudio(peerId)
@@ -145,6 +147,31 @@ export class AudioMixer {
   /** True when this peer is actually sending audio we can act on. */
   isAudible(peerId: string): boolean {
     return this.channels.has(peerId)
+  }
+
+  /**
+   * Route playback to a specific output device.
+   *
+   * Applied to the per-peer sink elements, which is where the audio actually
+   * leaves: an AudioContext cannot be re-pointed after creation in Chromium,
+   * but the elements feeding it can.
+   */
+  async setOutputDevice(deviceId: string): Promise<void> {
+    this.outputDevice = deviceId
+    for (const channel of this.channels.values()) {
+      await this.applySink(channel.sink)
+    }
+  }
+
+  private async applySink(sink: HTMLAudioElement): Promise<void> {
+    const target = sink as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }
+    if (typeof target.setSinkId !== 'function') return
+    try {
+      await target.setSinkId(this.outputDevice)
+    } catch (error) {
+      // A device can vanish between listing and selection.
+      console.warn('[audio] setSinkId failed:', error)
+    }
   }
 
   setMasterVolume(volume: number): void {

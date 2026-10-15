@@ -328,7 +328,10 @@ export class MeshSession {
       }
 
       case 'offer':
-        await this.answerOffer(from, payload.offer, true)
+        // A plain offer is a RENEGOTIATION over the existing connection —
+        // someone added or removed a track. Rebuilding here would undo the
+        // entire point of renegotiating.
+        await this.answerOffer(from, payload.offer, false)
         break
 
       case 'reconnectOffer':
@@ -471,7 +474,11 @@ export class MeshSession {
     this.publishers.get(peerId)?.close()
     const link = this.makeLink(peerId, 'publisher')
     this.publishers.set(peerId, link)
+    link.setViewerCount(this.publishers.size)
     await this.flushCandidates(peerId + ':in', link)
+
+    // Everyone's share of the upload just shrank by one.
+    for (const other of this.publishers.values()) other.setViewerCount(this.publishers.size)
 
     for (const { track, stream, kind } of tracks) {
       await link.publish(track, stream, kind, this.local.profile)
@@ -509,9 +516,49 @@ export class MeshSession {
     return out
   }
 
-  /** Renegotiate with everyone currently watching us. */
-  private async republish(): Promise<void> {
-    for (const peerId of [...this.publishers.keys()]) await this.publishTo(peerId)
+  /**
+   * Bring every viewer's connection in line with what we are publishing.
+   *
+   * Adds and removes tracks on the connections that already exist and
+   * renegotiates; only a peer with no connection yet gets a new one.
+   *
+   * The previous version closed and rebuilt every publisher link on any
+   * change, so toggling a camera cost each viewer a fresh ICE gather and
+   * DTLS handshake — which is what put everyone on "Reconnecting" in the
+   * middle of a session, and got worse with each extra person in the room.
+   */
+  private async syncTracks(): Promise<void> {
+    const wanted = this.localTracks()
+    const viewers = [...this.publishers.keys()]
+
+    for (const link of this.publishers.values()) {
+      link.setViewerCount(viewers.length)
+    }
+
+    for (const peerId of viewers) {
+      const link = this.publishers.get(peerId)
+      if (!link) continue
+
+      let changed = false
+
+      // Remove what is no longer being published.
+      const wantedIds = new Set(wanted.map((t) => t.track.id))
+      for (const trackId of link.publishedTrackIds) {
+        if (!wantedIds.has(trackId)) {
+          await link.unpublish(trackId)
+          changed = true
+        }
+      }
+
+      // Add what is new.
+      for (const { track, stream, kind } of wanted) {
+        if (link.has(track.id)) continue
+        await link.publish(track, stream, kind, this.local.profile)
+        changed = true
+      }
+
+      if (changed) await link.renegotiate()
+    }
   }
 
   private announce(): void {
@@ -543,7 +590,41 @@ export class MeshSession {
     }
     this.announce()
     this.emit()
-    await this.republish()
+    await this.syncTracks()
+  }
+
+  /**
+   * Point the camera or microphone at a different device, live.
+   *
+   * Every viewer's sender has its track swapped in place, so nobody sees a
+   * reconnect — the picture simply becomes the other camera. Falls back to a
+   * full republish only if a sender refuses the swap.
+   */
+  async swapDevice(kind: 'camera' | 'mic', stream: MediaStream | null): Promise<void> {
+    const previous = kind === 'camera' ? this.local.camera : this.local.mic
+    const oldTrack =
+      kind === 'camera' ? previous?.getVideoTracks()[0] : previous?.getAudioTracks()[0]
+    const newTrack =
+      kind === 'camera' ? stream?.getVideoTracks()[0] : stream?.getAudioTracks()[0]
+
+    if (!oldTrack || !newTrack || this.publishers.size === 0) {
+      // Nothing live to swap into; take the ordinary path.
+      if (kind === 'camera') await this.setCamera(stream)
+      else await this.setMic(stream)
+      return
+    }
+
+    let allSwapped = true
+    for (const link of this.publishers.values()) {
+      if (!(await link.replaceTrack(oldTrack.id, newTrack))) allSwapped = false
+    }
+
+    oldTrack.stop()
+    if (kind === 'camera') this.local.camera = stream
+    else this.local.mic = stream
+    this.emit()
+
+    if (!allSwapped) await this.syncTracks()
   }
 
   async setCamera(stream: MediaStream | null): Promise<void> {
@@ -551,7 +632,7 @@ export class MeshSession {
     this.local.camera = stream
     this.announce()
     this.emit()
-    await this.republish()
+    await this.syncTracks()
   }
 
   async setMic(stream: MediaStream | null): Promise<void> {
@@ -559,7 +640,7 @@ export class MeshSession {
     this.local.mic = stream
     this.announce()
     this.emit()
-    await this.republish()
+    await this.syncTracks()
   }
 
   async setScreenProfile(profile: ScreenProfileName): Promise<void> {

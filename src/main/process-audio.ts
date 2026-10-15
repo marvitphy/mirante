@@ -44,24 +44,38 @@ interface NativeModule {
 }
 
 /**
- * Applications whose audio must never reach a broadcast, because they are
- * carrying other people's voices. Pre-filtered out of the picker so you cannot
- * pick the echo by accident.
+ * Applications whose audio must never reach a broadcast, because they carry
+ * other people's voices.
+ *
+ * Names are a weak filter and this list proved it: it said `tvmirante.exe`
+ * (the package name) while the shipped binary is `Mirante.exe` (the product
+ * name), so our OWN output — your friends' voices, played by this very app —
+ * was captured and sent straight back to them. The exact echo the whole
+ * per-process design exists to prevent, defeated by a filename.
+ *
+ * Our own process is now excluded by pid, which cannot drift. The list below
+ * covers the other apps people use for voice, matched loosely so that
+ * Discord's several channels and TeamSpeak's versioned binaries all land.
  */
-const VOICE_APPS = new Set([
-  'tvmirante.exe',
-  'discord.exe',
-  'discordptb.exe',
-  'discordcanary.exe',
-  'teamspeak.exe',
-  'ts3client_win64.exe',
-  'teams.exe',
-  'ms-teams.exe',
-  'slack.exe',
-  'zoom.exe',
-  'mumble.exe',
-  'skype.exe'
-])
+const VOICE_APP_PATTERNS = [
+  /^discord/i,
+  /^teamspeak/i,
+  /^ts3client/i,
+  /^ts5client/i,
+  /^mirante/i,
+  /teams/i,
+  /^slack/i,
+  /^zoom/i,
+  /^mumble/i,
+  /^skype/i,
+  /^webex/i,
+  /^steamwebhelper$/i
+]
+
+function carriesVoices(executable: string): boolean {
+  const name = executable.replace(/\.exe$/i, '')
+  return VOICE_APP_PATTERNS.some((pattern) => pattern.test(name))
+}
 
 let native: NativeModule | null = null
 let loadError: string | null = null
@@ -151,7 +165,12 @@ export function listAudioApps(hint?: string): AudioApp[] {
   }
   console.log(`[process-audio] ${apps.length} audio sessions`)
 
-  const safe = apps.filter((a) => !VOICE_APPS.has(a.executable.toLowerCase()))
+  // Our own pid first: exact, and immune to the app ever being renamed.
+  const ownPid = process.pid
+  const safe = apps.filter((a) => a.pid !== ownPid && !carriesVoices(a.executable))
+
+  const dropped = apps.length - safe.length
+  if (dropped > 0) console.log(`[process-audio] excluded ${dropped} voice-carrying app(s)`)
   if (!hint) return safe
 
   const needle = hint.toLowerCase()

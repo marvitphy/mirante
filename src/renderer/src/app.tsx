@@ -5,9 +5,12 @@ import { ControlDock } from './components/control-dock'
 import { IconClose } from './components/icons'
 import { JoinScreen } from './components/join-screen'
 import { MiranteRail } from './components/mirante-rail'
+import { CameraPicker } from './components/camera-picker'
+import { SettingsModal } from './components/settings-modal'
 import { SourcePicker } from './components/source-picker'
 import { Stage, type ViewMode } from './components/stage'
 import { TitleBar } from './components/title-bar'
+import { getSettings, listDevices, useSettings } from './lib/settings'
 import { useAutoHide } from './lib/use-auto-hide'
 import { useHotkeys } from './lib/use-hotkeys'
 import { createPcmTrack, type PcmTrackHandle } from './rtc/pcm-track'
@@ -18,6 +21,8 @@ import { session, useSession } from './rtc/use-session'
 declare const __SIGNAL_URL__: string
 
 const DEFAULT_SERVER = __SIGNAL_URL__
+/** Filled from the updater state, which already carries the installed build. */
+let appVersion = '—'
 const STORE_KEY = 'tvmirante.join'
 
 interface JoinDetails {
@@ -50,6 +55,9 @@ export function App(): JSX.Element {
   const [pickerSources, setPickerSources] = useState<CaptureSource[] | null>(null)
   const [mode, setMode] = useState<ViewMode>('normal')
   const [shareError, setShareError] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [cameraPicker, setCameraPicker] = useState(false)
+  const settings = useSettings()
   const defaults = useMemo(loadDefaults, [])
 
   // Player chrome lives here rather than inside Stage, so the people rail
@@ -159,22 +167,55 @@ export function App(): JSX.Element {
     return window.mirante.audio.onPcm((chunk) => pcmRef.current?.push(chunk))
   }, [])
 
+  useEffect(() => {
+    void window.mirante.update
+      ?.state()
+      .then((s) => {
+        appVersion = s.current
+      })
+      .catch(() => undefined)
+  }, [])
+
   // --- publishing ----------------------------------------------------------
+
+  /** Open the camera, using `deviceId` or whatever is already configured. */
+  const openCamera = useCallback(async (deviceId?: string): Promise<void> => {
+    const id = deviceId ?? getSettings().cameraId
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          ...(id ? { deviceId: { exact: id } } : {}),
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        }
+      })
+      await session.setCamera(stream)
+    } catch (error) {
+      console.warn('[media] camera denied:', error)
+      setShareError('Nao consegui abrir a camera.')
+    }
+  }, [])
 
   const toggleCamera = useCallback(async () => {
     if (snapshot.local.camera) {
       await session.setCamera(null)
       return
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
-      })
-      await session.setCamera(stream)
-    } catch (error) {
-      console.warn('[media] camera denied:', error)
+
+    // First time with more than one camera: ask, with a live preview. A list
+    // of "Câmera 1 / Câmera 2" is a guess otherwise, and guessing wrong means
+    // broadcasting the lid camera instead of the one pointed at your face.
+    if (!getSettings().cameraId) {
+      const { cameras } = await listDevices()
+      if (cameras.length > 1) {
+        setCameraPicker(true)
+        return
+      }
     }
-  }, [snapshot.local.camera])
+
+    await openCamera()
+  }, [openCamera, snapshot.local.camera])
 
   const toggleMic = useCallback(async () => {
     if (snapshot.local.mic) {
@@ -182,8 +223,10 @@ export function App(): JSX.Element {
       return
     }
     try {
+      const { microphoneId } = getSettings()
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
@@ -208,6 +251,63 @@ export function App(): JSX.Element {
       offCamera()
     }
   }, [toggleCamera, toggleMic, toggleScreen])
+
+  // Settings take effect now, not next launch. Volume and output device are
+  // instant; camera and microphone are swapped into the live senders with
+  // replaceTrack, so viewers never see a reconnect.
+  useEffect(() => {
+    session.audioMixer.setMasterVolume(settings.masterVolume)
+  }, [settings.masterVolume])
+
+  useEffect(() => {
+    void session.audioMixer.setOutputDevice(settings.speakerId)
+  }, [settings.speakerId])
+
+  useEffect(() => {
+    if (!snapshot.local.camera) return
+    const active = snapshot.local.camera.getVideoTracks()[0]
+    if (!active || active.getSettings().deviceId === settings.cameraId) return
+    void (async () => {
+      try {
+        const next = await navigator.mediaDevices.getUserMedia({
+          video: {
+            ...(settings.cameraId ? { deviceId: { exact: settings.cameraId } } : {}),
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          }
+        })
+        await session.swapDevice('camera', next)
+      } catch (error) {
+        console.warn('[settings] could not switch camera:', error)
+      }
+    })()
+    // Only the chosen device should retrigger this, not every snapshot tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.cameraId])
+
+  useEffect(() => {
+    if (!snapshot.local.mic) return
+    const active = snapshot.local.mic.getAudioTracks()[0]
+    if (!active || active.getSettings().deviceId === settings.microphoneId) return
+    void (async () => {
+      try {
+        const next = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            ...(settings.microphoneId ? { deviceId: { exact: settings.microphoneId } } : {}),
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1
+          }
+        })
+        await session.swapDevice('mic', next)
+      } catch (error) {
+        console.warn('[settings] could not switch microphone:', error)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.microphoneId])
 
   // --- viewing -------------------------------------------------------------
 
@@ -335,6 +435,7 @@ export function App(): JSX.Element {
           micOn={snapshot.local.mic !== null}
           focused={snapshot.focused}
           visible={chrome.visible}
+          mirrorSelf={settings.mirrorSelf}
           mixer={session.audioMixer}
           onFocus={(peerId) => session.focus(peerId)}
           onVolume={(peerId, volume) => session.setPeerAudio(peerId, { volume, muted: false })}
@@ -342,6 +443,7 @@ export function App(): JSX.Element {
             const peer = snapshot.peers.find((p) => p.info.id === peerId)
             if (peer) session.setPeerAudio(peerId, { muted: !peer.audio.muted })
           }}
+          onToggleMic={() => void toggleMic()}
         />
       </main>
 
@@ -355,6 +457,7 @@ export function App(): JSX.Element {
         onToggleMic={() => void toggleMic()}
         onProfile={(profile: ScreenProfileName) => void session.setScreenProfile(profile)}
         onLeave={() => void leave()}
+        onSettings={() => setSettingsOpen(true)}
       />
 
       {pickerSources && (
@@ -362,6 +465,23 @@ export function App(): JSX.Element {
           sources={pickerSources}
           onConfirm={confirmSource}
           onCancel={closePicker}
+        />
+      )}
+
+      {cameraPicker && (
+        <CameraPicker
+          onConfirm={(deviceId) => {
+            setCameraPicker(false)
+            void openCamera(deviceId)
+          }}
+          onCancel={() => setCameraPicker(false)}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          version={snapshot.self ? appVersion : appVersion}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
 

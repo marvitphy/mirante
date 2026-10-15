@@ -72,6 +72,10 @@ export interface PeerLinkOptions {
 }
 
 const STATS_INTERVAL_MS = 1_000
+/** How long a dip must persist before the user is told about it. */
+const INTERRUPT_GRACE_MS = 2_000
+/** Agreeing samples before the relay badge flips, in either direction. */
+const RELAY_CONFIRMATIONS = 3
 
 interface StatsCursor {
   bytes: number
@@ -88,9 +92,30 @@ export class PeerLink {
   private readonly pc: RTCPeerConnection
   private readonly options: PeerLinkOptions
   private readonly senders = new Map<string, RTCRtpSender>()
+  /** How many viewers share this publisher's upload, for budgeting. */
+  private shareOfUpload = 1
   /** Candidates that arrive before the remote description is set. */
   private readonly pendingCandidates: RTCIceCandidateInit[] = []
   private statsTimer: number | null = null
+  /**
+   * Pending "interrupted" announcement.
+   *
+   * ICE dips into `disconnected` on any brief hiccup and usually recovers in
+   * well under a second. Forwarding that straight to the UI makes
+   * "Reconnecting" strobe at people while the picture never actually stops.
+   */
+  private interruptTimer: number | null = null
+  /** Consecutive samples agreeing the path is relayed. */
+  private relaySamples = 0
+  /**
+   * Last round-trip time we actually measured.
+   *
+   * Not every `getStats` sample carries one — RTT comes from RTCP reports,
+   * which arrive on their own schedule. Treating a sample without one as
+   * zero made the readout blink between a real number and "—", and since
+   * the text changed width it shoved the volume slider sideways each time.
+   */
+  private lastRtt = 0
   private cursor: StatsCursor | null = null
   private makingOffer = false
   private closed = false
@@ -137,19 +162,45 @@ export class PeerLink {
     this.startStats()
   }
 
+  private clearInterrupt(): void {
+    if (this.interruptTimer !== null) {
+      window.clearTimeout(this.interruptTimer)
+      this.interruptTimer = null
+    }
+  }
+
   private reportState(): void {
     if (this.closed) return
     switch (this.pc.connectionState) {
       case 'connected':
+        this.clearInterrupt()
         this.options.onState('live')
         break
+
       case 'disconnected':
+        // Hold the bad news. Most of these recover before anyone could have
+        // read the message, and a notice that flickers is worse than none.
+        if (this.interruptTimer === null) {
+          this.interruptTimer = window.setTimeout(() => {
+            this.interruptTimer = null
+            if (!this.closed && this.pc.connectionState === 'disconnected') {
+              this.options.onState('interrupted')
+            }
+          }, INTERRUPT_GRACE_MS)
+        }
+        break
+
       case 'failed':
+        // Failed does not recover on its own; say so immediately.
+        this.clearInterrupt()
         this.options.onState('interrupted')
         break
+
       case 'closed':
+        this.clearInterrupt()
         this.options.onState('closed')
         break
+
       default:
         this.options.onState('connecting')
     }
@@ -161,6 +212,26 @@ export class PeerLink {
    * Add a track to this connection. Pass the *same* track instance you passed
    * to every other link — see the class comment.
    */
+  /** True when this track is already on the wire. */
+  has(trackId: string): boolean {
+    return this.senders.has(trackId)
+  }
+
+  get publishedTrackIds(): string[] {
+    return [...this.senders.keys()]
+  }
+
+  /**
+   * Split the upload budget across viewers.
+   *
+   * In a mesh the publisher sends a separate copy to every viewer, so the
+   * profile's ceiling is a per-viewer figure that must be divided or three
+   * friends will ask for three times the bandwidth one person has.
+   */
+  setViewerCount(count: number): void {
+    this.shareOfUpload = Math.max(1, count)
+  }
+
   async publish(
     track: MediaStreamTrack,
     stream: MediaStream,
@@ -183,8 +254,39 @@ export class PeerLink {
       preferCodecs(transceiver, kind === 'camera' ? 'camera' : 'screen')
     }
 
-    if (kind === 'screen') await applyProfile(sender, SCREEN_PROFILES[screenProfile])
-    else if (kind === 'camera') await applyProfile(sender, CAMERA_PROFILE)
+    if (kind === 'screen') await this.applyShared(sender, SCREEN_PROFILES[screenProfile])
+    else if (kind === 'camera') await this.applyShared(sender, CAMERA_PROFILE)
+  }
+
+  private async applyShared(
+    sender: RTCRtpSender,
+    profile: (typeof SCREEN_PROFILES)[ScreenProfileName] | typeof CAMERA_PROFILE
+  ): Promise<void> {
+    // Never below 400 kbit/s: past that the picture stops being useful and
+    // you may as well not send it.
+    const budget = Math.max(400_000, Math.round(profile.maxBitrate / this.shareOfUpload))
+    await applyProfile(sender, { ...profile, maxBitrate: budget })
+  }
+
+  /**
+   * Swap a live track for another without renegotiating.
+   *
+   * `replaceTrack` is the whole reason changing camera mid-call can be
+   * instant: the transceiver, its SSRC and its encoding parameters all stay
+   * put, so there is no offer/answer and no interruption for the viewer.
+   */
+  async replaceTrack(oldTrackId: string, next: MediaStreamTrack): Promise<boolean> {
+    const sender = this.senders.get(oldTrackId)
+    if (!sender) return false
+    try {
+      await sender.replaceTrack(next)
+    } catch (error) {
+      console.warn('[rtc] replaceTrack failed:', error)
+      return false
+    }
+    this.senders.delete(oldTrackId)
+    this.senders.set(next.id, sender)
+    return true
   }
 
   async unpublish(trackId: string): Promise<void> {
@@ -201,7 +303,31 @@ export class PeerLink {
   /** Re-apply a quality profile to the live screen sender without renegotiating. */
   async setScreenProfile(trackId: string, profile: ScreenProfileName): Promise<void> {
     const sender = this.senders.get(trackId)
-    if (sender) await applyProfile(sender, SCREEN_PROFILES[profile])
+    if (sender) await this.applyShared(sender, SCREEN_PROFILES[profile])
+  }
+
+  /**
+   * Offer again over the SAME connection.
+   *
+   * Adding or removing a track does not need a new PeerConnection — that is
+   * what renegotiation is for. Rebuilding instead meant a fresh ICE gather
+   * and DTLS handshake every time somebody toggled their camera, and every
+   * viewer sat on "Reconnecting" while it happened.
+   */
+  async renegotiate(): Promise<void> {
+    if (this.closed || this.makingOffer) return
+    if (this.pc.signalingState !== 'stable') return
+    this.makingOffer = true
+    try {
+      const offer = await this.pc.createOffer()
+      const tuned = applyAudioTuning(offer, MEDIA_OPUS)
+      await this.pc.setLocalDescription(tuned)
+      this.options.send({ cmd: 'offer', offer: tuned })
+    } catch (error) {
+      console.warn('[rtc] renegotiation failed:', error)
+    } finally {
+      this.makingOffer = false
+    }
   }
 
   // --- negotiation --------------------------------------------------------
@@ -358,7 +484,14 @@ export class PeerLink {
       }
     })
 
-    next.relayed = next.candidateType === 'relay'
+    // Same reasoning as the interrupt grace: the selected pair can change
+    // during ICE, and a badge that alternates between DIRECT and RELAYED
+    // every second teaches the viewer to ignore it.
+    const looksRelayed = next.candidateType === 'relay'
+    this.relaySamples = looksRelayed
+      ? Math.min(RELAY_CONFIRMATIONS, this.relaySamples + 1)
+      : Math.max(0, this.relaySamples - 1)
+    next.relayed = this.relaySamples >= RELAY_CONFIRMATIONS
     next.packetsLost = lost
 
     if (this.cursor) {
@@ -373,6 +506,10 @@ export class PeerLink {
       }
     }
 
+    // Carry the previous measurement rather than reporting a gap.
+    if (next.rttMs > 0) this.lastRtt = next.rttMs
+    else next.rttMs = this.lastRtt
+
     this.cursor = { bytes, packets, lost, frames, at: now }
     this.options.onStats(next)
   }
@@ -381,6 +518,7 @@ export class PeerLink {
     if (this.closed) return
     this.closed = true
     if (this.statsTimer !== null) window.clearInterval(this.statsTimer)
+    this.clearInterrupt()
     this.senders.clear()
     this.pc.close()
     this.options.onState('closed')

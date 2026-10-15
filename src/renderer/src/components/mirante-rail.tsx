@@ -34,10 +34,14 @@ interface MiranteRailProps {
   focused: string | null
   /** Fades in lockstep with the stage chrome. */
   visible: boolean
+  /** Show your own camera as a mirror, the way a mirror behaves. */
+  mirrorSelf: boolean
   mixer: AudioMixer
   onFocus: (peerId: string | null) => void
   onVolume: (peerId: string, volume: number) => void
   onToggleMute: (peerId: string) => void
+  /** Your own microphone. The tile's mic icon is a control, not a readout. */
+  onToggleMic: () => void
 }
 
 export function MiranteRail({
@@ -48,10 +52,12 @@ export function MiranteRail({
   micOn,
   focused,
   visible,
+  mirrorSelf,
   mixer,
   onFocus,
   onVolume,
-  onToggleMute
+  onToggleMute,
+  onToggleMic
 }: MiranteRailProps): JSX.Element {
   return (
     <div className="tm-rail" data-visible={visible} role="list" aria-label="Pessoas na sala">
@@ -59,15 +65,26 @@ export function MiranteRail({
         name={selfName}
         hue={selfHue}
         stream={localCamera}
-        mirrored
+        mirrored={mirrorSelf}
         active={focused === null}
         label="Sua prévia"
         onFocus={() => onFocus(null)}
         corner={<span className="tm-tile__self-mark label">você</span>}
         slot={
-          <span className={`tm-tile__slot${micOn ? '' : ' is-off'}`}>
+          // Clickable, not decorative. An icon that looks like a button and
+          // does nothing is worse than no icon: it teaches people that the
+          // controls here are unreliable.
+          <button
+            type="button"
+            className={`tm-tile__slot tm-tile__slot--button${micOn ? '' : ' is-off'}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggleMic()
+            }}
+            title={micOn ? 'Desligar seu microfone' : 'Ligar seu microfone'}
+          >
             {micOn ? <IconMic size={13} /> : <IconMicOff size={13} />}
-          </span>
+          </button>
         }
       />
 

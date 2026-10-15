@@ -194,6 +194,9 @@ export function Stage({
               onMouseEnter={() => onHold(true)}
               onMouseLeave={() => onHold(false)}
             >
+              {/* Named, because the same control also exists on the rail tile
+                  and nobody should have to work out which person it affects. */}
+              <span className="tm-stage__volume-who label">{peer.info.name}</span>
               <VolumeSlider
                 volume={peer.audio.volume}
                 muted={peer.audio.muted}
