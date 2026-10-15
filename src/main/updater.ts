@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 
-import { app, ipcMain, type BrowserWindow } from 'electron'
+import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 
 import { log } from './log'
@@ -40,14 +40,28 @@ export interface UpdateState {
   /** 0..100 while downloading. */
   percent: number
   message: string | null
+  /**
+   * Where to get the installer by hand when the automatic path cannot work.
+   *
+   * Some failures do not improve on a second attempt. The installer is
+   * unsigned, so Windows Defender sometimes removes it the instant it lands —
+   * `update-downloaded` fires, the file is already gone, and "try again"
+   * repeats the whole download for the same ending. Offering the download
+   * page is the only move that actually gets the person onto the new version.
+   */
+  fallbackUrl: string | null
 }
+
+/** Releases page, for the manual path. */
+const RELEASES_URL = 'https://github.com/marvitphy/mirante/releases/latest'
 
 let state: UpdateState = {
   current: app.getVersion(),
   status: 'idle',
   version: null,
   percent: 0,
-  message: null
+  message: null,
+  fallbackUrl: null
 }
 let timer: NodeJS.Timeout | null = null
 /**
@@ -83,6 +97,10 @@ export function registerUpdaterIpc(): void {
     if (!started) return state
     await check()
     return state
+  })
+
+  ipcMain.on('update:open-releases', () => {
+    void shell.openExternal(RELEASES_URL)
   })
 
   ipcMain.on('update:install', () => {
@@ -178,17 +196,21 @@ function wire(): void {
     downloadedPath = info.downloadedFile ?? null
     const exists = downloadedPath !== null && existsSync(downloadedPath)
     if (!exists) {
+      // Downloading again lands in the same place and meets the same scanner,
+      // so this one goes straight to the manual route.
       log('update', `downloaded but missing on disk: ${downloadedPath ?? '(no path)'}`)
       push({
         status: 'error',
         version: info.version,
         percent: 0,
-        message: 'O download terminou mas o arquivo sumiu. Tente de novo.'
+        message:
+          'O instalador sumiu logo depois de baixar — antivirus costuma remover arquivo sem assinatura. Baixe manualmente.',
+        fallbackUrl: RELEASES_URL
       })
       return
     }
     log('update', `ready: ${info.version} at ${downloadedPath}`)
-    push({ status: 'ready', version: info.version, percent: 100 })
+    push({ status: 'ready', version: info.version, percent: 100, fallbackUrl: null })
   })
 
   autoUpdater.on('error', (error) => {
@@ -200,8 +222,13 @@ function wire(): void {
     downloadedPath = null
     push(
       wasWorking
-        ? { status: 'error', percent: 0, message: 'Falha ao baixar a atualizacao.' }
-        : { status: 'idle', percent: 0, message: null }
+        ? {
+            status: 'error',
+            percent: 0,
+            message: 'Falha ao baixar a atualizacao.',
+            fallbackUrl: RELEASES_URL
+          }
+        : { status: 'idle', percent: 0, message: null, fallbackUrl: null }
     )
   })
 

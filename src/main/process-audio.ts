@@ -236,8 +236,29 @@ type Capture = InstanceType<NativeModule['ProcessAudioCapture']>
 
 const SAMPLE_RATE = 48_000
 const CHANNELS = 2
-/** f32 stereo frames per 10 ms — the cadence WASAPI delivers at. */
-const MIX_FRAMES = (SAMPLE_RATE / 100) * CHANNELS
+/** f32 stereo samples per 10 ms — the cadence WASAPI delivers at. */
+const FRAME_10MS = (SAMPLE_RATE / 100) * CHANNELS
+
+/**
+ * How often we try to forward what has accumulated.
+ *
+ * Note "try": Windows gives Node a timer resolution around 15.6 ms, so this
+ * fires roughly every 15 ms no matter what we ask for. That is fine — what
+ * matters is that each tick forwards EVERYTHING waiting rather than a fixed
+ * slice, which is the bug this constant used to be half of.
+ */
+const MIX_INTERVAL_MS = 10
+
+/**
+ * Ceiling on one forwarded buffer, as a multiple of 10 ms.
+ *
+ * Only reached after a real stall. It keeps a recovery from arriving as one
+ * enormous burst that the playout side would just have to throw away.
+ */
+const MAX_BURST = FRAME_10MS * 10
+
+/** Roughly a second of backlog per source before the oldest audio is dropped. */
+const MAX_QUEUED = FRAME_10MS * 100
 
 interface Source {
   capture: Capture
@@ -274,6 +295,13 @@ const sources = new Map<number, Source>()
 let target: AudioTarget | null = null
 let mixTimer: NodeJS.Timeout | null = null
 let rescanTimer: NodeJS.Timeout | null = null
+
+/** Samples this source has ready. */
+function available(source: Source): number {
+  let total = -source.offset
+  for (const chunk of source.queue) total += chunk.length
+  return total
+}
 
 /** Pull up to `count` samples from one source, zero-filling what it lacks. */
 function drain(source: Source, out: Float32Array, count: number): void {
@@ -320,8 +348,9 @@ function openCapture(mod: NativeModule, pid: number): void {
           chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
         )
       )
-      // Never let one stalled consumer grow without bound.
-      while (source.queue.length > 64) source.queue.shift()
+      // Safety valve only. Reaching it means the mix loop has stopped running,
+      // not that it is merely behind — being behind is now self-correcting.
+      while (available(source) > MAX_QUEUED) source.queue.shift()
     })
     sources.set(pid, source)
     console.log(`[process-audio] capturando pid ${pid} (${sources.size} no total)`)
@@ -398,16 +427,34 @@ export function startProcessAudio(
   rescan()
   rescanTimer = setInterval(rescan, RESCAN_INTERVAL_MS)
 
+  // Forward everything that has arrived, not a fixed slice.
+  //
+  // The fixed slice was a permanent, compounding deficit: WASAPI produces 10 ms
+  // of audio every 10 ms of real time, while this timer only actually fires
+  // about every 15 ms on Windows. Taking exactly 10 ms per tick consumed at
+  // roughly two thirds of the production rate, so the backlog grew without
+  // limit until the cap started discarding chunks — a dropout every couple of
+  // seconds, forever. Draining what is there instead makes the loop
+  // self-correcting: a late tick simply carries more.
   mixTimer = setInterval(() => {
     if (window.isDestroyed()) return
-    const mixed = new Float32Array(MIX_FRAMES)
-    for (const source of sources.values()) drain(source, mixed, MIX_FRAMES)
+
+    let count = 0
+    for (const source of sources.values()) count = Math.max(count, available(source))
+    if (count <= 0) return
+
+    count = Math.min(count, MAX_BURST)
+    count -= count % CHANNELS
+    if (count === 0) return
+
+    const mixed = new Float32Array(count)
+    for (const source of sources.values()) drain(source, mixed, count)
     // Clip rather than wrap: summed streams can exceed unity.
-    for (let i = 0; i < mixed.length; i++) {
+    for (let i = 0; i < count; i++) {
       mixed[i] = mixed[i] > 1 ? 1 : mixed[i] < -1 ? -1 : mixed[i]
     }
     window.webContents.send('audio:pcm', mixed.buffer)
-  }, 10)
+  }, MIX_INTERVAL_MS)
 
   return { sampleRate: SAMPLE_RATE, channels: CHANNELS }
 }

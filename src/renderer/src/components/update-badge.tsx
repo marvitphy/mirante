@@ -22,7 +22,8 @@ const IDLE: UpdateState = {
   status: 'idle',
   version: null,
   percent: 0,
-  message: null
+  message: null,
+  fallbackUrl: null
 }
 
 export function UpdateBadge(): JSX.Element | null {
@@ -70,15 +71,24 @@ export function UpdateBadge(): JSX.Element | null {
   }
 
   if (state.status === 'error') {
+    // Some failures repeat no matter how many times you ask. When the main
+    // process says so, the button stops promising a retry and offers the
+    // download page instead — the one thing that does work.
+    const manual = state.fallbackUrl !== null
     return (
       <button
         type="button"
         className="tm-update tm-update--failed"
-        onClick={() => void checkNow()}
-        title={`${state.message ?? 'Falha na atualizacao'} — clique pra tentar de novo`}
+        onClick={() => (manual ? window.mirante.update.openReleases() : void checkNow())}
+        title={
+          state.message ??
+          (manual ? 'Baixe o instalador no navegador' : 'Falha na atualizacao')
+        }
       >
         <span className="tm-update__dot" />
-        <span className="tm-update__text label">tentar de novo</span>
+        <span className="tm-update__text label">
+          {manual ? 'baixar manualmente' : 'tentar de novo'}
+        </span>
         <span className="tm-update__current num">v{state.current}</span>
       </button>
     )

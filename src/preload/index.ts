@@ -57,6 +57,8 @@ export interface MiranteApi {
   update: {
     state: () => Promise<UpdateState>
     check: () => Promise<UpdateState>
+    /** Open the releases page, for when the automatic path cannot work. */
+    openReleases: () => void
     /** Quit and apply the downloaded update. */
     install: () => void
     onState: (handler: (state: UpdateState) => void) => () => void
@@ -100,6 +102,7 @@ const api: MiranteApi = {
   update: {
     state: () => ipcRenderer.invoke('update:state') as Promise<UpdateState>,
     check: () => ipcRenderer.invoke('update:check') as Promise<UpdateState>,
+    openReleases: () => ipcRenderer.send('update:open-releases'),
     install: () => ipcRenderer.send('update:install'),
     onState: (handler) => subscribe('update:state', (next) => handler(next as UpdateState))
   },
