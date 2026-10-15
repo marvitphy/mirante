@@ -333,13 +333,18 @@ export class PeerLink {
    * something on, off, or swapping its source is `replaceTrack` — which
    * needs no renegotiation at all and therefore cannot break anything.
    */
-  private ensureSlots(): void {
+  private ensureSlots(screenProfile: ScreenProfileName): void {
     if (this.slots.size > 0) return
+    // Codec preference is fixed when the transceiver is created, because
+    // changing it later needs renegotiation — the thing fixed slots exist to
+    // avoid. The screen's choice therefore follows the profile in force at
+    // the moment the link is built.
+    const screenContent = SCREEN_PROFILES[screenProfile].contentHint
     for (const slot of SLOTS) {
       const transceiver = this.pc.addTransceiver(slot.kind, { direction: 'sendonly' })
       this.slots.set(slot.name, transceiver)
       if (slot.kind === 'video') {
-        preferCodecs(transceiver, slot.name === 'camera' ? 'camera' : 'screen')
+        preferCodecs(transceiver, slot.name === 'camera' ? 'motion' : screenContent)
       }
     }
   }
@@ -350,7 +355,7 @@ export class PeerLink {
     track: MediaStreamTrack | null,
     screenProfile: ScreenProfileName = 'smooth'
   ): Promise<boolean> {
-    this.ensureSlots()
+    this.ensureSlots(screenProfile)
     const transceiver = this.slots.get(name)
     if (!transceiver) return false
 

@@ -6,31 +6,54 @@
  * than prose.
  */
 
-/** Codec order we prefer for screen content. */
-const SCREEN_CODEC_ORDER = ['video/AV1', 'video/VP9', 'video/H264', 'video/VP8']
-/** Camera is small and moves a lot; H.264 hardware paths are the safest bet. */
-const CAMERA_CODEC_ORDER = ['video/H264', 'video/VP9', 'video/AV1', 'video/VP8']
+/**
+ * Codec order by content, measured rather than assumed.
+ *
+ * The previous order led with AV1 on the theory that it is a large win on
+ * screen content — flat regions, sharp text, repeated tiles. That is true of
+ * AV1 the format and false of AV1 the software encoder available here: asked
+ * for 1080p60 it collapsed to 480x270 at 1 frame per second. A codec that
+ * cannot keep up does not compress better, it just arrives late. So AV1 goes
+ * last everywhere until there is hardware behind it.
+ *
+ * Motion content leads with H.264, which has the broadest hardware support
+ * and the cheapest software fallback. Detail content leads with VP9, which is
+ * genuinely better on text at low bitrates and only has to manage 30 fps.
+ */
+const MOTION_CODEC_ORDER = ['video/H264', 'video/VP9', 'video/VP8', 'video/AV1']
+const DETAIL_CODEC_ORDER = ['video/VP9', 'video/H264', 'video/VP8', 'video/AV1']
+
+export type CodecContent = 'motion' | 'detail'
 
 /**
  * Reorder a transceiver's codecs.
  *
- * TeamSpeak offers AV1 ahead of VP8 and uses H.264 High profile (`640c1f`)
- * rather than the Constrained Baseline browsers default to. AV1 is a large win
- * specifically on screen content — flat regions, sharp text, repeated tiles.
+ * The list MUST come from `RTCRtpReceiver.getCapabilities`, not the sender's.
+ * This is not a stylistic preference — the sender list advertises H.264 High
+ * (`profile-level-id=640032`), which the receiver does not accept, and
+ * `setCodecPreferences` rejects the entire array over that one entry:
+ *
+ *     Invalid codec preferences: invalid codec with name "H264".
+ *
+ * It threw on every single call. Wrapped in a silent catch, that meant codec
+ * preference had never once been applied in this app — every stream ran on
+ * whatever order Chromium happened to default to, and no amount of reasoning
+ * about AV1 made any difference to a single frame. Failures are logged now,
+ * because a preference that quietly does nothing is worse than none at all.
  */
-export function preferCodecs(transceiver: RTCRtpTransceiver, kind: 'screen' | 'camera'): void {
-  if (typeof RTCRtpSender.getCapabilities !== 'function') return
-  const capabilities = RTCRtpSender.getCapabilities('video')
+export function preferCodecs(transceiver: RTCRtpTransceiver, content: CodecContent): void {
+  if (typeof RTCRtpReceiver.getCapabilities !== 'function') return
+  const capabilities = RTCRtpReceiver.getCapabilities('video')
   if (!capabilities) return
 
-  const order = kind === 'screen' ? SCREEN_CODEC_ORDER : CAMERA_CODEC_ORDER
+  const order = content === 'motion' ? MOTION_CODEC_ORDER : DETAIL_CODEC_ORDER
   const rank = (codec: RTCRtpCodec): number => {
     const index = order.indexOf(codec.mimeType)
     return index === -1 ? order.length : index
   }
 
-  // H.264 High profile first within the H.264 group, mirroring TeamSpeak's
-  // `profile-level-id=640c1f` offer.
+  // Highest H.264 profile first within the H.264 group: more efficient at the
+  // same bitrate, and every decoder that matters here handles it.
   const scored = [...capabilities.codecs].sort((a, b) => {
     const byMime = rank(a) - rank(b)
     if (byMime !== 0) return byMime
@@ -41,8 +64,8 @@ export function preferCodecs(transceiver: RTCRtpTransceiver, kind: 'screen' | 'c
 
   try {
     transceiver.setCodecPreferences(scored)
-  } catch {
-    // Older engines reject unknown codecs wholesale; the default order is fine.
+  } catch (error) {
+    console.warn('[rtc] setCodecPreferences recusado:', (error as Error).message)
   }
 }
 

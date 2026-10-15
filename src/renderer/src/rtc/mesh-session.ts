@@ -53,6 +53,17 @@ const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
 const BUDGET_START = 3_000_000
 const BUDGET_MIN = 1_000_000
 const BUDGET_MAX = 20_000_000
+/**
+ * Ceiling while any viewer is reached through a TURN relay.
+ *
+ * A relay is the one path that costs money and the one path whose capacity is
+ * not ours, so it earns a lower ceiling. It does NOT earn the right to
+ * override the quality someone picked — that is what used to happen, and it
+ * is why "Nitido" silently became "Economico" and stayed there: the override
+ * latched and never let go, even once the path went direct again. Quality is
+ * the person's choice; how much bandwidth it gets is ours.
+ */
+const BUDGET_MAX_RELAYED = 3_000_000
 /** How often the budget is reconsidered. */
 const GOVERNOR_INTERVAL_MS = 3_000
 /** Healthy samples in a row before asking for more. */
@@ -167,7 +178,6 @@ export class MeshSession {
   }
 
   /** Set once per session, so a manual profile change is not fought over. */
-  private relayThrottled = false
 
   private snapshot: SessionSnapshot = this.buildSnapshot()
 
@@ -534,16 +544,7 @@ export class MeshSession {
       onStats: (stats) => {
         const peer = this.peers.get(peerId)
         if (!peer) return
-        const wasRelayed = peer.stats.relayed
         peer.stats = stats
-        // Going through a relay is the only path that costs money, so it is
-        // also the only path worth throttling. Dropping to the thrifty
-        // profile cuts a relayed stream from roughly 5 Mbit/s to 2.5 —
-        // halving both the bill and the odds of saturating someone's upload.
-        if (!wasRelayed && stats.relayed && role === 'publisher') {
-          console.warn(`[rtc] ${peerId} is relayed; dropping to thrifty`)
-          void this.throttleRelayed()
-        }
         this.emit()
       }
     })
@@ -638,11 +639,19 @@ export class MeshSession {
     let worstRtt = 0
     let worstLoss = 0
     let cpuBound = false
+    let relayed = false
     for (const link of links) {
       const stats = link.stats
       if (stats.rttMs > worstRtt) worstRtt = stats.rttMs
       if (stats.lossRatio > worstLoss) worstLoss = stats.lossRatio
       if (stats.limitation === 'cpu') cpuBound = true
+      if (stats.relayed) relayed = true
+    }
+
+    const ceiling = relayed ? BUDGET_MAX_RELAYED : BUDGET_MAX
+    if (this.uploadBudget > ceiling) {
+      this.uploadBudget = ceiling
+      this.spreadBudget()
     }
 
     // The encoder, not the link, is the wall. Raising the budget would only
@@ -666,7 +675,7 @@ export class MeshSession {
       this.healthyStreak++
       if (this.healthyStreak >= GOVERNOR_PATIENCE) {
         this.healthyStreak = 0
-        this.uploadBudget = Math.min(BUDGET_MAX, Math.round(this.uploadBudget * 1.25))
+        this.uploadBudget = Math.min(ceiling, Math.round(this.uploadBudget * 1.25))
       }
     } else {
       this.healthyStreak = 0
@@ -853,12 +862,6 @@ export class MeshSession {
    * Only ever downgrades: if someone already chose `thrifty`, or picked a
    * profile deliberately after this fired, we leave their choice alone.
    */
-  private async throttleRelayed(): Promise<void> {
-    if (this.local.profile === 'thrifty' || this.relayThrottled) return
-    this.relayThrottled = true
-    await this.setScreenProfile('thrifty')
-  }
-
   focus(peerId: string | null): void {
     this.focused = peerId
     this.emit()
