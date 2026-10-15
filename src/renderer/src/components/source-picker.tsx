@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 
 import type { CaptureSource } from '../../../main/capture'
-import type { AudioApp, AudioCapability } from '../../../main/process-audio'
+import type { AudioCapability } from '../../../main/process-audio'
 import { IconClose } from './icons'
 
 /**
@@ -39,7 +39,6 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
     (screens[0] ?? windows[0])?.id ?? null
   )
   const [capability, setCapability] = useState<AudioCapability | null>(null)
-  const [apps, setApps] = useState<AudioApp[]>([])
   /** Sending sound is what people expect, so it starts on. */
   const [sendAudio, setSendAudio] = useState(true)
 
@@ -49,14 +48,6 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
   useEffect(() => {
     void window.mirante.audio.capability().then(setCapability)
   }, [])
-
-  // Rank the app list against the chosen window's title, so sharing a game
-  // pre-selects that game's audio.
-  useEffect(() => {
-    if (!capability?.supported) return
-    // Only to show what will be included; nothing here is a choice.
-    void window.mirante.audio.listApps().then(setApps)
-  }, [capability?.supported, selectedSource?.name])
 
   function confirm(): void {
     if (selected) onConfirm(selected, sendAudio)
@@ -140,16 +131,9 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
             />
             <span className="tm-switch__text">
               <b>Transmitir com som</b>
-              <span>{soundHint(selectedSource, capability?.supported === true, apps)}</span>
+              <span>{soundHint(selectedSource, capability?.supported === true)}</span>
             </span>
           </label>
-
-          {sendAudio && capability?.supported && selectedSource?.kind === 'screen' && (
-            <p className="tm-audio__out">
-              <span className="label">fora</span>
-              Discord · TeamSpeak · Mirante · Teams · Zoom
-            </p>
-          )}
         </section>
 
         <footer className="tm-sheet__foot">
@@ -243,27 +227,21 @@ function SourceTile({
   )
 }
 
-/** "chrome.exe" reads as noise; "chrome" reads as a thing you recognise. */
-function shortName(executable: string): string {
-  return executable.replace(/\.exe$/i, '')
-}
-
 /**
- * Say what will actually be sent. Nobody has to choose — it follows from the
- * source — but they should still be able to see it before committing.
+ * One line, in words.
+ *
+ * This used to list the executables that would be captured —
+ * `msedgewebview2 · WhatsApp.Root · electron` — which is noise: the reader
+ * cannot act on it, half the names mean nothing to them, and the one thing
+ * they actually want to know is whether their friends' voices will leak.
+ * So answer that, and nothing else.
  */
-function soundHint(
-  source: CaptureSource | null,
-  perApp: boolean,
-  apps: AudioApp[]
-): string {
+function soundHint(source: CaptureSource | null, perApp: boolean): string {
   if (!source) return 'Escolha uma tela ou janela.'
   if (!perApp) {
     return 'Som do sistema inteiro — pode causar eco se você estiver em chamada.'
   }
-  if (source.kind === 'window') return `Só o som de ${source.name}.`
-  const playing = apps.map((a) => shortName(a.executable)).join(' · ')
-  return playing
-    ? `Tudo que está tocando — ${playing} — menos a voz dos seus amigos.`
-    : 'Tudo que estiver tocando, menos a voz dos seus amigos.'
+  return source.kind === 'window'
+    ? `Só o som de ${source.name}.`
+    : 'Tudo que estiver tocando no PC, menos a voz dos seus amigos.'
 }

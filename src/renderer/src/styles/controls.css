@@ -392,7 +392,7 @@
 .tm-audio {
   display: flex;
   flex-direction: column;
-  gap: var(--s-4);
+  gap: var(--s-3);
   padding: var(--s-5) var(--s-6);
   background: var(--surface-base);
   border-top: 1px solid var(--rule);
@@ -775,26 +775,6 @@
   color: var(--text-tertiary);
 }
 
-.tm-audio__summary {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding-left: 27px;
-}
-.tm-audio__summary p {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-3);
-  min-width: 0;
-  font-size: var(--text-micro);
-  color: var(--text-secondary);
-}
-.tm-audio__summary .label {
-  flex: 0 0 72px;
-}
-.tm-audio__out {
-  color: var(--text-muted) !important;
-}
 
 /* The installed version, always visible. Two people comparing notes should
    never have to dig through a menu to find out they are on different builds. */
@@ -1107,4 +1087,181 @@
   .tm-setrow__text span {
     display: none;
   }
+}
+
+/* --- dock, stacked ------------------------------------------------------ */
+/*
+ * Geometry, not vibes.
+ *
+ * Every row is exactly --dock-row tall and every gap is --s-2, so the column
+ * reads as a stack rather than a pile. Rows that hold more than one control
+ * split into equal fractions with `grid`, which is the only way two buttons
+ * end up the same width regardless of the words inside them — flex sizes to
+ * content, and "NÍTIDO" and "ECONÔMICO" are not the same length.
+ */
+
+.tm-dock--column {
+  --dock-row: 36px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s-2);
+  flex: 0 0 auto;
+  height: auto;
+  padding: var(--s-4) var(--s-3) var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+
+/* One height for everything in the column. */
+.tm-dock--column > * {
+  flex: 0 0 auto;
+  height: var(--dock-row);
+  width: 100%;
+}
+
+.tm-dock--column .tm-dock__spacer {
+  display: none;
+}
+
+/* Camera and microphone: two halves, exactly. */
+.tm-dock--column .tm-dock__group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/* Three qualities: three thirds, exactly. */
+.tm-dock--column .tm-dock__profiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.tm-dock--column .tm-pill,
+.tm-dock--column .tm-seg {
+  width: auto;
+  min-width: 0;
+  padding: 0;
+}
+
+/*
+ * Settings is a square; Leave takes the rest.
+ *
+ * And it breathes. Everything above is what you are doing right now —
+ * broadcast, source, camera, quality — and these two are how you stop. Equal
+ * spacing made them read as one more control in the sequence, which is both
+ * wrong and a way to click Leave by reflex. A wider gap and a hairline say
+ * "different kind of thing" without a label.
+ */
+.tm-dock--column .tm-dock__foot {
+  display: grid;
+  grid-template-columns: var(--dock-row) minmax(0, 1fr);
+  gap: var(--s-2);
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule-faint);
+  /* The row owns its own spacing, so it is taller than one grid row. */
+  height: calc(var(--dock-row) + var(--s-8) + 1px);
+  align-items: end;
+}
+.tm-dock--column .tm-pill--lone {
+  width: var(--dock-row);
+  height: var(--dock-row);
+}
+.tm-dock--column .tm-btn {
+  height: var(--dock-row);
+  width: 100%;
+  padding: 0 var(--s-3);
+}
+
+/* The version line is information, not a control: it sits under the grid
+   rather than inside it. */
+.tm-dock--column .tm-update {
+  height: auto;
+  justify-content: center;
+  padding: var(--s-3) 0 0;
+}
+
+/* --- sheets must never exceed the window -------------------------------- */
+/* The app opens at a modest size and people shrink it further. Any sheet
+   taller than the window used to clip at the bottom, taking the footer —
+   and therefore the confirm button — with it.
+   The contract: head and foot never grow, the middle is the only thing that
+   scrolls, and the sheet itself can always shrink to fit. */
+
+.tm-sheet {
+  min-height: 0;
+}
+
+.tm-sheet > .tm-sheet__head,
+.tm-sheet > .tm-sheet__foot,
+.tm-sheet > .tm-tabs,
+.tm-sheet > .tm-audio {
+  flex: 0 0 auto;
+}
+
+.tm-sheet__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Reclaim the scrim's margin as the window gets short, then drop it. */
+@media (max-height: 820px) {
+  .tm-scrim {
+    padding: var(--s-4);
+  }
+  .tm-setgroup {
+    padding: var(--s-4) var(--s-5) var(--s-1);
+  }
+  .tm-setrow {
+    padding: var(--s-2) 0;
+  }
+  .tm-campick {
+    padding: var(--s-4) var(--s-5);
+  }
+}
+
+@media (max-height: 640px) {
+  .tm-scrim {
+    padding: 0;
+  }
+  .tm-sheet {
+    height: 100%;
+    border: none;
+  }
+  /* Hints are the first thing to go when height is scarce; the labels and
+     the controls themselves are what people need. */
+  .tm-setrow__text span {
+    display: none;
+  }
+}
+
+/* Settings and Leave at opposite ends; the version line sits below them. */
+.tm-dock__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.tm-dock--column .tm-dock__foot {
+  width: 100%;
+}
+.tm-dock--column .tm-update {
+  justify-content: center;
+  width: 100%;
+  height: auto;
+  padding: var(--s-1) 0 0;
+}
+
+/* Along the bottom the same separation is horizontal: a rule and real space
+   between what you are doing and how you stop. */
+.tm-dock--bar .tm-dock__foot {
+  gap: var(--s-3);
+  margin-left: var(--s-4);
+  padding-left: var(--s-5);
+  border-left: 1px solid var(--rule-faint);
+  height: var(--control-h);
+}
+.tm-dock--bar .tm-update {
+  order: -1;
 }

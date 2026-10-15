@@ -126,6 +126,34 @@ export function SettingsModal({ version, onClose }: SettingsModalProps): JSX.Ele
             </Row>
           </Group>
 
+          <Group title="Layout">
+            <Row
+              label="Lista de pessoas"
+              hint={
+                settings.railPosition === 'right'
+                  ? 'Coluna fixa à direita. Nada fica por cima do vídeo.'
+                  : 'Faixa sobre o vídeo, some junto com os controles.'
+              }
+            >
+              <div className="tm-segrow">
+                <button
+                  type="button"
+                  className={`tm-seg${settings.railPosition === 'right' ? ' is-on' : ''}`}
+                  onClick={() => updateSettings({ railPosition: 'right' })}
+                >
+                  Direita
+                </button>
+                <button
+                  type="button"
+                  className={`tm-seg${settings.railPosition === 'bottom' ? ' is-on' : ''}`}
+                  onClick={() => updateSettings({ railPosition: 'bottom' })}
+                >
+                  Embaixo
+                </button>
+              </div>
+            </Row>
+          </Group>
+
           <Group title="Transmissão">
             <Row label="Qualidade padrão" hint={PROFILE_HINTS[settings.defaultProfile]}>
               <div className="tm-segrow">

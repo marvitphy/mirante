@@ -66,10 +66,33 @@ export interface PeerLinkOptions {
   role: LinkRole
   iceServers: RTCIceServerConfig[]
   send: (payload: SignalPayload) => void
-  onTrack: (stream: MediaStream, track: MediaStreamTrack) => void
+  /**
+   * A track arrived, tagged with the slot it came in on.
+   *
+   * Slots are created in a fixed order, so the transceiver's `mid` identifies
+   * the role without anything being announced. That also replaces reading
+   * `event.streams[0]`, which is empty once senders come from
+   * `addTransceiver` rather than `addTrack`.
+   */
+  onTrack: (slot: SlotName, track: MediaStreamTrack) => void
   onState: (state: LinkState) => void
   onStats: (stats: LinkStats) => void
 }
+
+/**
+ * The media a link can carry, in a fixed order.
+ *
+ * Screen audio is separate from the microphone: they have different sources,
+ * different tuning, and either can be absent.
+ */
+export type SlotName = 'screen' | 'camera' | 'screenAudio' | 'mic'
+
+const SLOTS: Array<{ name: SlotName; kind: 'video' | 'audio' }> = [
+  { name: 'screen', kind: 'video' },
+  { name: 'camera', kind: 'video' },
+  { name: 'screenAudio', kind: 'audio' },
+  { name: 'mic', kind: 'audio' }
+]
 
 const STATS_INTERVAL_MS = 1_000
 /** How long a dip must persist before the user is told about it. */
@@ -91,7 +114,7 @@ export class PeerLink {
 
   private readonly pc: RTCPeerConnection
   private readonly options: PeerLinkOptions
-  private readonly senders = new Map<string, RTCRtpSender>()
+  private readonly slots = new Map<SlotName, RTCRtpTransceiver>()
   /** How many viewers share this publisher's upload, for budgeting. */
   private shareOfUpload = 1
   /** Candidates that arrive before the remote description is set. */
@@ -144,8 +167,9 @@ export class PeerLink {
     })
 
     this.pc.addEventListener('track', (event) => {
-      const [stream] = event.streams
-      if (stream) options.onTrack(stream, event.track)
+      const index = Number(event.transceiver.mid)
+      const slot = SLOTS[index]?.name
+      if (slot) options.onTrack(slot, event.track)
     })
 
     this.pc.addEventListener('connectionstatechange', () => this.reportState())
@@ -209,16 +233,61 @@ export class PeerLink {
   // --- publishing ---------------------------------------------------------
 
   /**
-   * Add a track to this connection. Pass the *same* track instance you passed
-   * to every other link — see the class comment.
+   * Fixed slots, created once, never removed.
+   *
+   * Adding and removing transceivers as people toggle things looks tidy and
+   * is a trap: removing a video transceiver from a BUNDLEd connection and
+   * renegotiating can take the remaining media down with it. That is what
+   * made a viewer lose the screen when the broadcaster merely turned their
+   * camera OFF.
+   *
+   * So every link gets the same four senders from the start, and turning
+   * something on, off, or swapping its source is `replaceTrack` — which
+   * needs no renegotiation at all and therefore cannot break anything.
    */
-  /** True when this track is already on the wire. */
-  has(trackId: string): boolean {
-    return this.senders.has(trackId)
+  private ensureSlots(): void {
+    if (this.slots.size > 0) return
+    for (const slot of SLOTS) {
+      const transceiver = this.pc.addTransceiver(slot.kind, { direction: 'sendonly' })
+      this.slots.set(slot.name, transceiver)
+      if (slot.kind === 'video') {
+        preferCodecs(transceiver, slot.name === 'camera' ? 'camera' : 'screen')
+      }
+    }
   }
 
-  get publishedTrackIds(): string[] {
-    return [...this.senders.keys()]
+  /** Put a track in a slot, or clear it. Returns true if the slot changed. */
+  async setSlot(
+    name: SlotName,
+    track: MediaStreamTrack | null,
+    screenProfile: ScreenProfileName = 'smooth'
+  ): Promise<boolean> {
+    this.ensureSlots()
+    const transceiver = this.slots.get(name)
+    if (!transceiver) return false
+
+    const sender = transceiver.sender
+    if (sender.track === track) return false
+
+    if (track && name !== 'mic') {
+      setContentHint(
+        track,
+        name === 'screen' ? SCREEN_PROFILES[screenProfile].contentHint : 'motion'
+      )
+    }
+
+    try {
+      await sender.replaceTrack(track)
+    } catch (error) {
+      console.warn(`[rtc] could not set ${name}:`, error)
+      return false
+    }
+
+    if (track) {
+      if (name === 'screen') await this.applyShared(sender, SCREEN_PROFILES[screenProfile])
+      else if (name === 'camera') await this.applyShared(sender, CAMERA_PROFILE)
+    }
+    return true
   }
 
   /**
@@ -232,32 +301,6 @@ export class PeerLink {
     this.shareOfUpload = Math.max(1, count)
   }
 
-  async publish(
-    track: MediaStreamTrack,
-    stream: MediaStream,
-    kind: 'screen' | 'camera' | 'mic',
-    screenProfile: ScreenProfileName = 'smooth'
-  ): Promise<void> {
-    // The hint is re-applied by applyProfile below; this covers the brief
-    // window before the sender exists.
-    setContentHint(
-      track,
-      kind === 'screen' ? SCREEN_PROFILES[screenProfile].contentHint : 'motion'
-    )
-
-    const sender = this.pc.addTrack(track, stream)
-    this.senders.set(track.id, sender)
-
-    const transceiver = this.pc.getTransceivers().find((t) => t.sender === sender)
-    if (transceiver && kind !== 'mic') {
-      transceiver.direction = 'sendonly'
-      preferCodecs(transceiver, kind === 'camera' ? 'camera' : 'screen')
-    }
-
-    if (kind === 'screen') await this.applyShared(sender, SCREEN_PROFILES[screenProfile])
-    else if (kind === 'camera') await this.applyShared(sender, CAMERA_PROFILE)
-  }
-
   private async applyShared(
     sender: RTCRtpSender,
     profile: (typeof SCREEN_PROFILES)[ScreenProfileName] | typeof CAMERA_PROFILE
@@ -268,51 +311,17 @@ export class PeerLink {
     await applyProfile(sender, { ...profile, maxBitrate: budget })
   }
 
-  /**
-   * Swap a live track for another without renegotiating.
-   *
-   * `replaceTrack` is the whole reason changing camera mid-call can be
-   * instant: the transceiver, its SSRC and its encoding parameters all stay
-   * put, so there is no offer/answer and no interruption for the viewer.
-   */
-  async replaceTrack(oldTrackId: string, next: MediaStreamTrack): Promise<boolean> {
-    const sender = this.senders.get(oldTrackId)
-    if (!sender) return false
-    try {
-      await sender.replaceTrack(next)
-    } catch (error) {
-      console.warn('[rtc] replaceTrack failed:', error)
-      return false
-    }
-    this.senders.delete(oldTrackId)
-    this.senders.set(next.id, sender)
-    return true
-  }
-
-  async unpublish(trackId: string): Promise<void> {
-    const sender = this.senders.get(trackId)
-    if (!sender) return
-    this.senders.delete(trackId)
-    try {
-      this.pc.removeTrack(sender)
-    } catch {
-      // Connection already closing.
-    }
-  }
-
   /** Re-apply a quality profile to the live screen sender without renegotiating. */
-  async setScreenProfile(trackId: string, profile: ScreenProfileName): Promise<void> {
-    const sender = this.senders.get(trackId)
-    if (sender) await this.applyShared(sender, SCREEN_PROFILES[profile])
+  async setScreenProfile(profile: ScreenProfileName): Promise<void> {
+    const sender = this.slots.get('screen')?.sender
+    if (sender?.track) await this.applyShared(sender, SCREEN_PROFILES[profile])
   }
 
   /**
    * Offer again over the SAME connection.
    *
-   * Adding or removing a track does not need a new PeerConnection — that is
-   * what renegotiation is for. Rebuilding instead meant a fresh ICE gather
-   * and DTLS handshake every time somebody toggled their camera, and every
-   * viewer sat on "Reconnecting" while it happened.
+   * Only needed when the slot layout itself changes, which now happens once
+   * per link. Everything after that is replaceTrack.
    */
   async renegotiate(): Promise<void> {
     if (this.closed || this.makingOffer) return
@@ -519,7 +528,7 @@ export class PeerLink {
     this.closed = true
     if (this.statsTimer !== null) window.clearInterval(this.statsTimer)
     this.clearInterrupt()
-    this.senders.clear()
+    this.slots.clear()
     this.pc.close()
     this.options.onState('closed')
   }

@@ -18,6 +18,8 @@ export interface SignalingOptions {
   url: string
   room: string
   name: string
+  /** Stable for the life of this window; see the protocol comment. */
+  clientId: string
   onMessage: (message: ServerMessage) => void
   onStatus: (status: SignalingStatus) => void
 }
@@ -89,7 +91,8 @@ export class Signaling {
         t: 'hello',
         version: PROTOCOL_VERSION,
         room: this.options.room,
-        name: this.options.name
+        name: this.options.name,
+        clientId: this.options.clientId
       })
       this.startPing()
     })

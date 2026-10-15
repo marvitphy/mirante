@@ -10,7 +10,13 @@ import {
 } from '../../../shared/protocol'
 import { soundJoin, soundLeave, soundLiveEnd, soundLiveStart } from '../lib/sounds'
 import { AudioMixer, type PeerAudio } from './audio-mixer'
-import { EMPTY_STATS, PeerLink, type LinkState, type LinkStats } from './peer-link'
+import {
+  EMPTY_STATS,
+  PeerLink,
+  type LinkState,
+  type LinkStats,
+  type SlotName
+} from './peer-link'
 import { SCREEN_PROFILES, setContentHint, type ScreenProfileName } from './sdp'
 import { Signaling, type SignalingStatus } from './signaling'
 
@@ -43,7 +49,12 @@ export interface PeerView {
   audio: PeerAudio
   /** False when they are sending no audio at all — the control says so. */
   audible: boolean
-  stream: MediaStream | null
+  /** Their shared screen, if any. This is what belongs on the stage. */
+  screen: MediaStream | null
+  /** Their camera, if any. This belongs in their tile, next to their name. */
+  camera: MediaStream | null
+  /** One stream per slot, built from the tracks as they arrive. */
+  streams: Map<SlotName, MediaStream>
 }
 
 export interface LocalPublish {
@@ -69,6 +80,11 @@ export interface SessionSnapshot {
 type Listener = () => void
 
 export class MeshSession {
+  /**
+   * This window's identity, stable across reconnects but distinct per
+   * window — two instances on one machine are genuinely two participants.
+   */
+  private readonly clientId = crypto.randomUUID()
   private signaling: Signaling | null = null
   private iceServers: RTCIceServerConfig[] = []
   /**
@@ -151,6 +167,7 @@ export class MeshSession {
       // server ignores the path and reads the room from `hello` instead, so
       // the same client works against both.
       url: `${url.replace(/\/+$/, '')}/room/${encodeURIComponent(room)}`,
+      clientId: this.clientId,
       room,
       name,
       onStatus: (status) => {
@@ -250,7 +267,9 @@ export class MeshSession {
           this.earlyCandidates.delete(message.id + ':out')
           this.mixer.detach(message.id)
           peer.audible = false
-          peer.stream = null
+          peer.streams.clear()
+          peer.screen = null
+          peer.camera = null
           peer.link = 'closed'
           if (this.focused === message.id) this.focused = null
         }
@@ -298,7 +317,9 @@ export class MeshSession {
       stats: { ...EMPTY_STATS },
       audio: this.mixer.peerAudio(info.id),
       audible: false,
-      stream: null
+      screen: null,
+      camera: null,
+      streams: new Map()
     }
   }
 
@@ -394,17 +415,30 @@ export class MeshSession {
       role,
       iceServers: this.iceServers,
       send: (payload) => this.send(peerId, dir, payload),
-      onTrack: (stream) => {
+      onTrack: (slot, track) => {
         const peer = this.peers.get(peerId)
         if (!peer) return
-        peer.stream = stream
-        if (stream.getAudioTracks().length > 0) {
+
+        // One stream per slot. The slot IS the identity, so the screen can
+        // never end up where the camera belongs.
+        let stream = peer.streams.get(slot)
+        if (!stream) {
+          stream = new MediaStream()
+          peer.streams.set(slot, stream)
+        }
+        if (!stream.getTracks().includes(track)) stream.addTrack(track)
+
+        if (slot === 'screen') peer.screen = stream
+        if (slot === 'camera') peer.camera = stream
+
+        if (track.kind === 'audio') {
+          // Both audio slots feed one per-person volume control: from the
+          // listener's side, "how loud is this person" is a single question.
           this.mixer.attach(peerId, stream)
           peer.audible = true
         }
-        if (this.focused === null && stream.getVideoTracks().length > 0) {
-          this.focused = peerId
-        }
+
+        if (this.focused === null && slot === 'screen') this.focused = peerId
         this.emit()
       },
       onState: (state) => {
@@ -461,8 +495,7 @@ export class MeshSession {
    * is what lets Chromium run one encoder for all viewers.
    */
   private async publishTo(peerId: string): Promise<void> {
-    const tracks = this.localTracks()
-    if (tracks.length === 0) {
+    if (!this.isPublishing()) {
       this.send(peerId, 'out', {
         cmd: 'joinResponse',
         decision: false,
@@ -474,90 +507,45 @@ export class MeshSession {
     this.publishers.get(peerId)?.close()
     const link = this.makeLink(peerId, 'publisher')
     this.publishers.set(peerId, link)
-    link.setViewerCount(this.publishers.size)
     await this.flushCandidates(peerId + ':in', link)
 
     // Everyone's share of the upload just shrank by one.
     for (const other of this.publishers.values()) other.setViewerCount(this.publishers.size)
 
-    for (const { track, stream, kind } of tracks) {
-      await link.publish(track, stream, kind, this.local.profile)
-    }
-
+    await this.syncTracks()
     const offer = await link.createOffer()
     this.send(peerId, 'out', { cmd: 'joinResponse', decision: true, offer })
   }
 
-  private localTracks(): Array<{
-    track: MediaStreamTrack
-    stream: MediaStream
-    kind: 'screen' | 'camera' | 'mic'
-  }> {
-    const out: Array<{
-      track: MediaStreamTrack
-      stream: MediaStream
-      kind: 'screen' | 'camera' | 'mic'
-    }> = []
-    if (this.local.screen) {
-      for (const track of this.local.screen.getTracks()) {
-        out.push({ track, stream: this.local.screen, kind: 'screen' })
-      }
-    }
-    if (this.local.camera) {
-      for (const track of this.local.camera.getVideoTracks()) {
-        out.push({ track, stream: this.local.camera, kind: 'camera' })
-      }
-    }
-    if (this.local.mic) {
-      for (const track of this.local.mic.getAudioTracks()) {
-        out.push({ track, stream: this.local.mic, kind: 'mic' })
-      }
-    }
-    return out
+  private isPublishing(): boolean {
+    return this.local.screen !== null || this.local.camera !== null || this.local.mic !== null
   }
 
   /**
-   * Bring every viewer's connection in line with what we are publishing.
+   * Point every viewer's slots at what we are currently publishing.
    *
-   * Adds and removes tracks on the connections that already exist and
-   * renegotiates; only a peer with no connection yet gets a new one.
+   * Nothing is added, removed or renegotiated: the slots were created with
+   * the connection and only ever have their contents swapped. That is why
+   * toggling a camera no longer makes everyone's picture hitch — there is no
+   * offer/answer to wait for.
    *
-   * The previous version closed and rebuilt every publisher link on any
-   * change, so toggling a camera cost each viewer a fresh ICE gather and
-   * DTLS handshake — which is what put everyone on "Reconnecting" in the
-   * middle of a session, and got worse with each extra person in the room.
+   * It also fixes a worse failure. Removing a video transceiver from a
+   * BUNDLEd connection and renegotiating could take the remaining media down
+   * with it, which is how a viewer lost the screen share when the
+   * broadcaster merely turned their camera OFF.
    */
   private async syncTracks(): Promise<void> {
-    const wanted = this.localTracks()
-    const viewers = [...this.publishers.keys()]
+    const screen = this.local.screen?.getVideoTracks()[0] ?? null
+    const screenAudio = this.local.screen?.getAudioTracks()[0] ?? null
+    const camera = this.local.camera?.getVideoTracks()[0] ?? null
+    const mic = this.local.mic?.getAudioTracks()[0] ?? null
 
     for (const link of this.publishers.values()) {
-      link.setViewerCount(viewers.length)
-    }
-
-    for (const peerId of viewers) {
-      const link = this.publishers.get(peerId)
-      if (!link) continue
-
-      let changed = false
-
-      // Remove what is no longer being published.
-      const wantedIds = new Set(wanted.map((t) => t.track.id))
-      for (const trackId of link.publishedTrackIds) {
-        if (!wantedIds.has(trackId)) {
-          await link.unpublish(trackId)
-          changed = true
-        }
-      }
-
-      // Add what is new.
-      for (const { track, stream, kind } of wanted) {
-        if (link.has(track.id)) continue
-        await link.publish(track, stream, kind, this.local.profile)
-        changed = true
-      }
-
-      if (changed) await link.renegotiate()
+      link.setViewerCount(this.publishers.size)
+      await link.setSlot('screen', screen, this.local.profile)
+      await link.setSlot('camera', camera)
+      await link.setSlot('screenAudio', screenAudio)
+      await link.setSlot('mic', mic)
     }
   }
 
@@ -567,7 +555,9 @@ export class MeshSession {
       screen: this.local.screen !== null,
       camera: this.local.camera !== null,
       mic: this.local.mic !== null,
-      screenLabel: this.local.screenLabel ?? undefined
+      screenLabel: this.local.screenLabel ?? undefined,
+      screenStreamId: this.local.screen?.id,
+      cameraStreamId: this.local.camera?.id
     }
     this.signaling?.send({ t: 'publishState', state })
   }
@@ -600,31 +590,20 @@ export class MeshSession {
    * reconnect — the picture simply becomes the other camera. Falls back to a
    * full republish only if a sender refuses the swap.
    */
+  /**
+   * Point the camera or microphone at a different device, live.
+   *
+   * With fixed slots this is the ordinary path rather than a special case:
+   * the new track goes into the same slot, no renegotiation, no interruption.
+   */
   async swapDevice(kind: 'camera' | 'mic', stream: MediaStream | null): Promise<void> {
     const previous = kind === 'camera' ? this.local.camera : this.local.mic
-    const oldTrack =
-      kind === 'camera' ? previous?.getVideoTracks()[0] : previous?.getAudioTracks()[0]
-    const newTrack =
-      kind === 'camera' ? stream?.getVideoTracks()[0] : stream?.getAudioTracks()[0]
-
-    if (!oldTrack || !newTrack || this.publishers.size === 0) {
-      // Nothing live to swap into; take the ordinary path.
-      if (kind === 'camera') await this.setCamera(stream)
-      else await this.setMic(stream)
-      return
-    }
-
-    let allSwapped = true
-    for (const link of this.publishers.values()) {
-      if (!(await link.replaceTrack(oldTrack.id, newTrack))) allSwapped = false
-    }
-
-    oldTrack.stop()
+    previous?.getTracks().forEach((t) => t.stop())
     if (kind === 'camera') this.local.camera = stream
     else this.local.mic = stream
+    this.announce()
     this.emit()
-
-    if (!allSwapped) await this.syncTracks()
+    await this.syncTracks()
   }
 
   async setCamera(stream: MediaStream | null): Promise<void> {
@@ -653,9 +632,7 @@ export class MeshSession {
       // first viewer gets the profile you picked.
       setContentHint(track, SCREEN_PROFILES[profile].contentHint)
 
-      for (const link of this.publishers.values()) {
-        await link.setScreenProfile(track.id, profile)
-      }
+      for (const link of this.publishers.values()) await link.setScreenProfile(profile)
     }
     this.emit()
   }

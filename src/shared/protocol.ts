@@ -33,6 +33,16 @@ export interface PeerPublishState {
   mic: boolean
   /** Set when the peer is sharing a screen: lets viewers label the stage. */
   screenLabel?: string
+  /**
+   * MediaStream ids, so a viewer can tell the screen from the camera.
+   *
+   * Both arrive as video tracks and nothing in the RTP layer says which is
+   * which. Guessing by arrival order meant that turning on a camera while
+   * already sharing put the camera on the stage and pushed the screen into
+   * the little tile — the two swapped depending on which track landed last.
+   */
+  screenStreamId?: string
+  cameraStreamId?: string
 }
 
 export type PublishKind = 'screen' | 'camera' | 'mic'
@@ -42,7 +52,22 @@ export type PublishKind = 'screen' | 'camera' | 'mic'
 // ---------------------------------------------------------------------------
 
 export type ClientMessage =
-  | { t: 'hello'; version: number; room: RoomId; name: string }
+  | {
+      t: 'hello'
+      version: number
+      room: RoomId
+      name: string
+      /**
+       * Who you are across reconnects.
+       *
+       * The peer id is minted per connection, so a client that drops and
+       * comes back arrives as a stranger — and if the server has not yet
+       * noticed the old socket died, the room shows the same person twice.
+       * This stays the same for the life of the app window, which lets the
+       * server REPLACE the previous session instead of adding to it.
+       */
+      clientId: string
+    }
   | { t: 'publishState'; state: PeerPublishState }
   /** Ask a publisher for its stream. The publisher answers with `joinResponse`. */
   | { t: 'join'; to: PeerId }

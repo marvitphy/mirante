@@ -509,3 +509,45 @@
     transform: rotate(360deg);
   }
 }
+
+/* --- sidebar layout ----------------------------------------------------- */
+/* Everything that is not the video lives in one fixed column: the people,
+   then the controls. The video gets a clean rectangle and nothing is ever
+   drawn on top of it, which is the whole point of watching together.
+   Nothing fades here — a control you have to summon is a control you have
+   to think about. */
+
+:root {
+  --side-w: 268px;
+}
+
+.tm-shell--rail-right {
+  grid-template-columns: minmax(0, 1fr) var(--side-w);
+  grid-template-rows: var(--titlebar-h) minmax(0, 1fr);
+}
+.tm-shell--rail-right .tm-titlebar {
+  grid-column: 1 / -1;
+}
+
+.tm-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-base);
+  border-left: 1px solid var(--rule);
+}
+
+/* Fullscreen is fullscreen: the video takes the window and the column goes. */
+.tm-shell--fullscreen.tm-shell--rail-right {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+.tm-shell--fullscreen .tm-side {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  :root {
+    --side-w: 220px;
+  }
+}

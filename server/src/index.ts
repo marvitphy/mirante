@@ -39,6 +39,8 @@ interface Peer {
   socket: WebSocket
   room: RoomId
   alive: boolean
+  /** Stable across this client's reconnects, so a return replaces. */
+  clientId: string
 }
 
 const rooms = new Map<RoomId, Map<string, Peer>>()
@@ -129,6 +131,14 @@ wss.on('connection', (socket: WebSocket) => {
         }
       }
 
+      // A reconnecting client is the same person: replace, never duplicate.
+      for (const [id, existing] of room) {
+        if (existing.clientId !== msg.clientId) continue
+        room.delete(id)
+        broadcast(room, { t: 'peerLeft', id })
+        existing.socket.close()
+      }
+
       if (room.size >= MAX_PEERS_PER_ROOM) {
         socket.send(
           JSON.stringify({
@@ -148,7 +158,8 @@ wss.on('connection', (socket: WebSocket) => {
         state: emptyPublishState(),
         socket,
         room: roomId,
-        alive: true
+        alive: true,
+        clientId: msg.clientId
       }
       room.set(id, peer)
 

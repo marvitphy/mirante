@@ -36,6 +36,8 @@ interface MiranteRailProps {
   visible: boolean
   /** Show your own camera as a mirror, the way a mirror behaves. */
   mirrorSelf: boolean
+  /** Bottom floats over the video; right takes a column of its own. */
+  position: 'bottom' | 'right'
   mixer: AudioMixer
   onFocus: (peerId: string | null) => void
   onVolume: (peerId: string, volume: number) => void
@@ -53,6 +55,7 @@ export function MiranteRail({
   focused,
   visible,
   mirrorSelf,
+  position,
   mixer,
   onFocus,
   onVolume,
@@ -60,7 +63,20 @@ export function MiranteRail({
   onToggleMic
 }: MiranteRailProps): JSX.Element {
   return (
-    <div className="tm-rail" data-visible={visible} role="list" aria-label="Pessoas na sala">
+    <div
+      className={`tm-rail tm-rail--${position}`}
+      // A column of its own is always there; a strip over the video comes and
+      // goes with the rest of the player chrome.
+      data-visible={position === 'right' ? true : visible}
+      role="list"
+      aria-label="Pessoas na sala"
+    >
+      {position === 'right' && (
+        <div className="tm-rail__head">
+          <span className="label">Na sala</span>
+          <span className="tm-rail__count num">{peers.length + 1}</span>
+        </div>
+      )}
       <Tile
         name={selfName}
         hue={selfHue}
@@ -100,9 +116,6 @@ export function MiranteRail({
         />
       ))}
 
-      {peers.length === 0 && (
-        <p className="tm-rail__lonely">só você por aqui — mande o nome da sala pra alguém</p>
-      )}
     </div>
   )
 }
@@ -224,7 +237,7 @@ function PeerTile({
     <Tile
       name={peer.info.name}
       hue={peer.info.hue}
-      stream={peer.state.camera ? peer.stream : null}
+      stream={peer.camera}
       active={active}
       label={`Ver ${peer.info.name}`}
       onFocus={onFocus}

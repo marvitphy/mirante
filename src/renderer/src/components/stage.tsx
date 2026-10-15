@@ -56,7 +56,9 @@ export function Stage({
   const [showStats, setShowStats] = useState(false)
   const [, setClockTick] = useState(0)
 
-  const stream = peer?.stream ?? localScreen
+  // The screen, explicitly. Falling back to whatever stream arrived last is
+  // how turning on a camera mid-broadcast used to replace the broadcast.
+  const stream = peer ? peer.screen : localScreen
   const live = peer ? peer.link === 'live' : localScreen !== null
 
   // `srcObject` is not a React prop; it has to be assigned imperatively.

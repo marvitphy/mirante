@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { app, ipcMain, type BrowserWindow } from 'electron'
 
 import { armedAudioPlan, type AudioPlan } from './capture'
@@ -75,6 +75,31 @@ const VOICE_APP_PATTERNS = [
 function carriesVoices(executable: string): boolean {
   const name = executable.replace(/\.exe$/i, '')
   return VOICE_APP_PATTERNS.some((pattern) => pattern.test(name))
+}
+
+/**
+ * Our own binary, whatever it is called today.
+ *
+ * `Mirante.exe` when packaged, `electron.exe` under `npm run dev`. Hardcoding
+ * either one leaks in the other, which is exactly what happened: the shipped
+ * build blocked `Mirante.exe` while development ran as `electron.exe` and
+ * merrily captured its own output — your friends' voices, played by this app,
+ * sent straight back to them.
+ *
+ * Deriving it from `process.execPath` cannot drift, in either direction.
+ */
+const OWN_EXECUTABLE = basename(process.execPath).toLowerCase()
+
+/**
+ * True for any process that is us.
+ *
+ * Matching on the executable rather than on `process.pid` matters because
+ * Electron plays audio from a CHILD process: the main process pid never
+ * appears in the audio session list, so excluding only that pid excluded
+ * nothing at all.
+ */
+function isOurs(app: AudioApp): boolean {
+  return app.pid === process.pid || app.executable.toLowerCase() === OWN_EXECUTABLE
 }
 
 let native: NativeModule | null = null
@@ -165,9 +190,7 @@ export function listAudioApps(hint?: string): AudioApp[] {
   }
   console.log(`[process-audio] ${apps.length} audio sessions`)
 
-  // Our own pid first: exact, and immune to the app ever being renamed.
-  const ownPid = process.pid
-  const safe = apps.filter((a) => a.pid !== ownPid && !carriesVoices(a.executable))
+  const safe = apps.filter((a) => !isOurs(a) && !carriesVoices(a.executable))
 
   const dropped = apps.length - safe.length
   if (dropped > 0) console.log(`[process-audio] excluded ${dropped} voice-carrying app(s)`)

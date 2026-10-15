@@ -87,11 +87,8 @@ export function App(): JSX.Element {
    * Doing it the other way round holds Chromium's request open across the
    * whole interaction and leaves no clean way to cancel; see capture.ts.
    */
-  const toggleScreen = useCallback(async () => {
-    if (snapshot.local.screen) {
-      await stopScreen()
-      return
-    }
+  /** Open the picker, whether starting a broadcast or changing its source. */
+  const openSourcePicker = useCallback(async () => {
     setShareError(null)
     const sources = await window.mirante.capture.listSources()
     if (sources.length === 0) {
@@ -99,7 +96,15 @@ export function App(): JSX.Element {
       return
     }
     setPickerSources(sources)
-  }, [snapshot.local.screen, stopScreen])
+  }, [])
+
+  const toggleScreen = useCallback(async () => {
+    if (snapshot.local.screen) {
+      await stopScreen()
+      return
+    }
+    await openSourcePicker()
+  }, [openSourcePicker, snapshot.local.screen, stopScreen])
 
   const confirmSource = useCallback(async (sourceId: string, withSound: boolean) => {
     setPickerSources(null)
@@ -395,8 +400,47 @@ export function App(): JSX.Element {
     )
   }
 
+  const rail = (
+    <MiranteRail
+      peers={snapshot.peers}
+      selfName={snapshot.self?.name ?? joined.name}
+      selfHue={snapshot.self?.hue ?? 263}
+      localCamera={snapshot.local.camera}
+      micOn={snapshot.local.mic !== null}
+      focused={snapshot.focused}
+      visible={chrome.visible}
+      mirrorSelf={settings.mirrorSelf}
+      position={settings.railPosition}
+      mixer={session.audioMixer}
+      onFocus={(peerId) => session.focus(peerId)}
+      onVolume={(peerId, volume) => session.setPeerAudio(peerId, { volume, muted: false })}
+      onToggleMute={(peerId) => {
+        const peer = snapshot.peers.find((p) => p.info.id === peerId)
+        if (peer) session.setPeerAudio(peerId, { muted: !peer.audio.muted })
+      }}
+      onToggleMic={() => void toggleMic()}
+    />
+  )
+
+  const dock = (
+    <ControlDock
+      sharing={snapshot.local.screen !== null}
+      cameraOn={snapshot.local.camera !== null}
+      micOn={snapshot.local.mic !== null}
+      profile={snapshot.local.profile}
+      layout={settings.railPosition === 'right' ? 'column' : 'bar'}
+      onToggleScreen={() => void toggleScreen()}
+      onChangeSource={() => void openSourcePicker()}
+      onToggleCamera={() => void toggleCamera()}
+      onToggleMic={() => void toggleMic()}
+      onProfile={(profile: ScreenProfileName) => void session.setScreenProfile(profile)}
+      onLeave={() => void leave()}
+      onSettings={() => setSettingsOpen(true)}
+    />
+  )
+
   return (
-    <div className={`tm-shell tm-shell--${mode}`}>
+    <div className={`tm-shell tm-shell--${mode} tm-shell--rail-${settings.railPosition}`}>
       <TitleBar
         room={joined.room}
         status={snapshot.status}
@@ -404,9 +448,12 @@ export function App(): JSX.Element {
         relayed={snapshot.anyRelayed}
       />
 
-      {/* The stage and the rail share one surface and one chrome timer. The
-          rail floats over the stage rather than holding a grid row, so the
-          video never loses space it has not earned. */}
+      {/* Two layouts, one set of parts.
+          `right` gives the video a clean rectangle of its own and parks the
+          people and the controls in a fixed column beside it — nothing is
+          ever drawn over what you are watching, and nothing fades.
+          `bottom` is the player-style arrangement: both float over the video
+          and disappear together while you watch. */}
       <main className="tm-main" {...chrome.bind}>
         <Stage
           peer={focusedPeer}
@@ -427,38 +474,17 @@ export function App(): JSX.Element {
           }}
         />
 
-        <MiranteRail
-          peers={snapshot.peers}
-          selfName={snapshot.self?.name ?? joined.name}
-          selfHue={snapshot.self?.hue ?? 263}
-          localCamera={snapshot.local.camera}
-          micOn={snapshot.local.mic !== null}
-          focused={snapshot.focused}
-          visible={chrome.visible}
-          mirrorSelf={settings.mirrorSelf}
-          mixer={session.audioMixer}
-          onFocus={(peerId) => session.focus(peerId)}
-          onVolume={(peerId, volume) => session.setPeerAudio(peerId, { volume, muted: false })}
-          onToggleMute={(peerId) => {
-            const peer = snapshot.peers.find((p) => p.info.id === peerId)
-            if (peer) session.setPeerAudio(peerId, { muted: !peer.audio.muted })
-          }}
-          onToggleMic={() => void toggleMic()}
-        />
+        {settings.railPosition === 'bottom' && rail}
       </main>
 
-      <ControlDock
-        sharing={snapshot.local.screen !== null}
-        cameraOn={snapshot.local.camera !== null}
-        micOn={snapshot.local.mic !== null}
-        profile={snapshot.local.profile}
-        onToggleScreen={() => void toggleScreen()}
-        onToggleCamera={() => void toggleCamera()}
-        onToggleMic={() => void toggleMic()}
-        onProfile={(profile: ScreenProfileName) => void session.setScreenProfile(profile)}
-        onLeave={() => void leave()}
-        onSettings={() => setSettingsOpen(true)}
-      />
+      {settings.railPosition === 'right' ? (
+        <aside className="tm-side">
+          {rail}
+          {dock}
+        </aside>
+      ) : (
+        dock
+      )}
 
       {pickerSources && (
         <SourcePicker

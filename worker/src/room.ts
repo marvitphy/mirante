@@ -44,6 +44,8 @@ import { resolveIceServers, type IceEnv } from './ice'
 interface Attachment {
   info: PeerInfo
   state: PeerPublishState
+  /** Stable across this client's reconnects. See the protocol comment. */
+  clientId: string
 }
 
 export class Room extends DurableObject<Env> {
@@ -131,6 +133,33 @@ export class Room extends DurableObject<Env> {
         return
       }
 
+      // Two cleanups before counting, both learned the hard way.
+      //
+      // A socket can be dead without the runtime having told us — the client
+      // crashed, the laptop slept, the process was killed. Until it is
+      // reaped its owner still occupies a slot and still shows in the room.
+      for (const { socket: other, data } of this.peers()) {
+        if (other.readyState > WebSocket.OPEN) {
+          other.serializeAttachment(null)
+          this.broadcast({ t: 'peerLeft', id: data.info.id })
+        }
+      }
+
+      // And a client that reconnects is the SAME person, not a new one.
+      // Without this the room filled up with duplicates of whoever had a
+      // flaky connection — two `dellannu`, two `cyk`, each with a different
+      // colour because each had a fresh peer id.
+      for (const { socket: other, data } of this.peers()) {
+        if (data.clientId !== msg.clientId) continue
+        other.serializeAttachment(null)
+        this.broadcast({ t: 'peerLeft', id: data.info.id })
+        try {
+          other.close(1000, 'replaced by reconnect')
+        } catch {
+          // Already gone; the attachment is cleared either way.
+        }
+      }
+
       const existing = this.peers()
       const limit = Number(this.env.MAX_PEERS_PER_ROOM ?? 8)
       if (existing.length >= limit) {
@@ -150,7 +179,11 @@ export class Room extends DurableObject<Env> {
         hue: hueFromId(id),
         joinedAt: Date.now()
       }
-      const attachment: Attachment = { info, state: emptyPublishState() }
+      const attachment: Attachment = {
+        info,
+        state: emptyPublishState(),
+        clientId: msg.clientId
+      }
       socket.serializeAttachment(attachment)
 
       let iceServers: RTCIceServerConfig[] = []

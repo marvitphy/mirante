@@ -30,6 +30,15 @@ export interface Settings {
   mirrorSelf: boolean
   /** Signalling server. Blank falls back to the one baked into the build. */
   server: string
+  /**
+   * Where the people live.
+   *
+   * `bottom` floats over the video and fades with the player chrome.
+   * `right` takes a column of its own, so nothing is ever drawn on top of
+   * what you are watching — which costs width, but on a 16:9 screen showing
+   * 16:9 content there is width to spare and height to save.
+   */
+  railPosition: 'bottom' | 'right'
 }
 
 const STORE_KEY = 'mirante.settings'
@@ -43,7 +52,8 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultProfile: 'smooth',
   shareWithSound: true,
   mirrorSelf: true,
-  server: ''
+  server: '',
+  railPosition: 'right'
 }
 
 function load(): Settings {
