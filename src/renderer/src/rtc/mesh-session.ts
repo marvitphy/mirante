@@ -18,6 +18,7 @@ import {
   type SlotName
 } from './peer-link'
 import { SCREEN_PROFILES, setContentHint, type ScreenProfileName } from './sdp'
+import { clientId } from '../lib/client-id'
 import { Signaling, type SignalingStatus } from './signaling'
 
 /**
@@ -27,6 +28,9 @@ import { Signaling, type SignalingStatus } from './signaling'
  * a visible interruption, restarting is not.
  */
 const REJOIN_AFTER_MS = 20_000
+
+/** How long to wait for a `joinResponse` before asking again. */
+const JOIN_RETRY_MS = 6_000
 
 /** The slots that carry sound, in the order the mixer should receive them. */
 const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
@@ -137,7 +141,7 @@ export class MeshSession {
    * This window's identity, stable across reconnects but distinct per
    * window — two instances on one machine are genuinely two participants.
    */
-  private readonly clientId = crypto.randomUUID()
+  private readonly clientId = clientId()
   private signaling: Signaling | null = null
   private iceServers: RTCIceServerConfig[] = []
   /**
@@ -157,6 +161,8 @@ export class MeshSession {
   private readonly earlyCandidates = new Map<string, RTCIceCandidateInit[]>()
   /** Pending automatic rejoin for a viewer link that will not come back. */
   private readonly rejoinTimers = new Map<string, number>()
+  /** Pending re-ask for a `join` that was never answered. */
+  private readonly joinRetries = new Map<string, number>()
   /** Total uplink the governor is currently willing to use. */
   private uploadBudget = BUDGET_START
   private healthyStreak = 0
@@ -274,6 +280,7 @@ export class MeshSession {
 
   private dropLinks(peerId: string): void {
     this.cancelRejoin(peerId)
+    this.cancelJoinRetry(peerId)
     this.publishers.get(peerId)?.close()
     this.viewers.get(peerId)?.close()
     this.publishers.delete(peerId)
@@ -538,6 +545,7 @@ export class MeshSession {
         if (role === 'viewer') {
           if (state === 'interrupted') this.scheduleRejoin(peerId)
           else this.cancelRejoin(peerId)
+          if (state === 'live' || state === 'connecting') this.cancelJoinRetry(peerId)
         }
         this.emit()
       },
@@ -604,6 +612,32 @@ export class MeshSession {
     }, REJOIN_AFTER_MS)
 
     this.rejoinTimers.set(peerId, timer)
+  }
+
+  private scheduleJoinRetry(peerId: string): void {
+    const existing = this.joinRetries.get(peerId)
+    if (existing !== undefined) window.clearTimeout(existing)
+
+    const timer = window.setTimeout(() => {
+      this.joinRetries.delete(peerId)
+      const peer = this.peers.get(peerId)
+      if (!peer) return
+      // Already watching, or they stopped publishing: nothing to chase.
+      if (peer.link === 'live' || peer.link === 'connecting') return
+      if (!peer.state.screen && !peer.state.camera && !peer.state.mic) return
+
+      console.warn(`[rtc] ${peerId}: sem resposta ao join, pedindo de novo`)
+      this.requestStream(peerId)
+    }, JOIN_RETRY_MS)
+
+    this.joinRetries.set(peerId, timer)
+  }
+
+  private cancelJoinRetry(peerId: string): void {
+    const timer = this.joinRetries.get(peerId)
+    if (timer === undefined) return
+    window.clearTimeout(timer)
+    this.joinRetries.delete(peerId)
   }
 
   private cancelRejoin(peerId: string): void {
@@ -700,8 +734,18 @@ export class MeshSession {
     peer.audible = this.mixer.isAudible(peer.info.id)
   }
 
+  /**
+   * Ask a publisher for its stream, and keep asking.
+   *
+   * A `join` is one message and a `joinResponse` is another; either can be
+   * lost, and the publisher can be mid-restart when it arrives. A single
+   * unanswered request left the person staring at a room that said someone
+   * was live while showing nothing — recoverable only by leaving and coming
+   * back, which is not a thing anyone should have to work out.
+   */
   private requestStream(peerId: string): void {
     this.cancelRejoin(peerId)
+    this.scheduleJoinRetry(peerId)
     this.mixer.resume()
     this.signaling?.send({ t: 'join', to: peerId })
   }
@@ -730,9 +774,13 @@ export class MeshSession {
     // Everyone's share of the upload just shrank by one.
     this.spreadBudget()
 
-    await this.syncTracks()
+    // Only this link stands between the newcomer and the picture. The other
+    // links are brought in line afterwards, off the critical path, so nobody
+    // waits on a connection that has nothing to do with them.
+    await this.syncLink(link)
     const offer = await link.createOffer()
     this.send(peerId, 'out', { cmd: 'joinResponse', decision: true, offer })
+    void this.syncTracks()
   }
 
   private isPublishing(): boolean {
@@ -753,16 +801,30 @@ export class MeshSession {
    * broadcaster merely turned their camera OFF.
    */
   private async syncTracks(): Promise<void> {
+    // In parallel, and one failure at a time. This used to be a sequential
+    // loop that every caller awaited, which meant a single wedged link — a
+    // ghost left behind by someone who restarted, say — delayed or blocked
+    // the work of every other link behind it. That is how a person could join
+    // a room, see that someone was live, and never receive the offer.
+    await Promise.allSettled(
+      [...this.publishers.values()].map((link) => this.syncLink(link))
+    )
+  }
+
+  /** Point one link's slots at what we are publishing. Never throws. */
+  private async syncLink(link: PeerLink): Promise<void> {
     const screen = this.local.screen?.getVideoTracks()[0] ?? null
     const screenAudio = this.local.screen?.getAudioTracks()[0] ?? null
     const camera = this.local.camera?.getVideoTracks()[0] ?? null
     const mic = this.local.mic?.getAudioTracks()[0] ?? null
 
-    for (const link of this.publishers.values()) {
+    try {
       await link.setSlot('screen', screen, this.local.profile)
       await link.setSlot('camera', camera)
       await link.setSlot('screenAudio', screenAudio)
       await link.setSlot('mic', mic)
+    } catch (error) {
+      console.warn(`[rtc] ${link.peerId}: nao consegui sincronizar:`, error)
     }
   }
 
