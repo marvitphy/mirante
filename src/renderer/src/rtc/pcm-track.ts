@@ -45,6 +45,26 @@ const TARGET_SLACK_MS = 160
 /** Fade applied when the buffer runs dry, instead of jumping to zero. */
 const FADE_MS = 4
 
+/**
+ * How far the backlog may sit from its target before the rate is nudged.
+ *
+ * The capture clock and the playback clock are different pieces of hardware
+ * that both call themselves 48 kHz. They are not, quite, and the difference
+ * accumulates: one direction drains the buffer until it underruns, the other
+ * fills it until the oldest audio is discarded. Both are audible, and an
+ * adaptive target does not help — it changes how often the artefact happens,
+ * not whether it happens.
+ *
+ * NetEq's answer is to stretch time continuously. This is the cheap version
+ * of the same idea: once the backlog has drifted past this margin, drop or
+ * repeat exactly ONE frame per render quantum. That is a 0.8% correction
+ * against a drift measured in hundredths of a percent, applied a frame at a
+ * time, and a single frame at 48 kHz is 20 microseconds — far below anything
+ * a person can hear. Drift stops accumulating, so it never reaches the point
+ * of becoming a gap.
+ */
+const DRIFT_MARGIN_MS = 12
+
 const WORKLET_SOURCE = `
 class PcmQueueProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -67,6 +87,11 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
     this.tail = new Float32Array(8)
     this.fadeLeft = 0
     this.cleanQuanta = 0
+    this.driftMargin = o.driftMargin
+    this.underruns = 0
+    this.overflows = 0
+    this.corrections = 0
+    this.reportAt = 0
 
     this.port.onmessage = (event) => {
       if (event.data === 'flush') {
@@ -86,6 +111,7 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
         const old = this.queue.shift()
         this.queued -= old.length - this.offset
         this.offset = 0
+        this.overflows++
       }
     }
   }
@@ -97,6 +123,18 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
       const k = this.fadeLeft > 0 ? this.fadeLeft / this.fadeSamples : 0
       for (let c = 0; c < channels; c++) output[c][frame] = this.tail[c] * k
       if (this.fadeLeft > 0) this.fadeLeft--
+    }
+  }
+
+  // Advance past one frame without emitting it. Used to shed drift.
+  skipFrame(channels) {
+    if (this.queue.length === 0) return
+    const chunk = this.queue[0]
+    this.offset += channels
+    this.queued -= channels
+    if (this.offset >= chunk.length) {
+      this.queue.shift()
+      this.offset = 0
     }
   }
 
@@ -114,10 +152,26 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
       this.cleanQuanta = 0
     }
 
+    // Correct the clocks before reading, never by more than a frame.
+    //
+    // Too full: shed one frame. Too empty: emit the previous frame twice, by
+    // simply not advancing after it is written. Either way the backlog walks
+    // back toward its target instead of running to one of the two edges.
+    let repeatFrame = false
+    const drift = this.queued - this.target
+    if (drift > this.driftMargin) {
+      this.skipFrame(channels)
+      this.corrections++
+    } else if (drift < -this.driftMargin && this.queue.length > 0) {
+      repeatFrame = true
+      this.corrections++
+    }
+
     for (let frame = 0; frame < frames; frame++) {
       if (this.queue.length === 0) {
         // Ran dry. Raise the cushion — this machine has told us the current
         // one is not enough — and ease out rather than cutting.
+        this.underruns++
         this.target = Math.min(this.targetMax, this.target + this.targetStep)
         this.fadeLeft = this.fadeSamples
         this.fade(output, channels, frame, frames)
@@ -131,6 +185,14 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
         output[c][frame] = v
         this.tail[c] = v
       }
+
+      // Hold position for exactly one frame when we are running short; the
+      // same twenty microseconds of audio simply plays twice.
+      if (repeatFrame) {
+        repeatFrame = false
+        continue
+      }
+
       this.offset += channels
       this.queued -= channels
       if (this.offset >= chunk.length) {
@@ -146,6 +208,21 @@ class PcmQueueProcessor extends AudioWorkletProcessor {
     if (this.cleanQuanta > 1500) {
       this.cleanQuanta = 0
       this.target = Math.max(this.targetMin, this.target - this.perMs)
+    }
+
+    // Say what actually happened, so the next report of crackling is a
+    // reading instead of an argument.
+    if (currentTime > this.reportAt) {
+      this.reportAt = currentTime + 15
+      this.port.postMessage({
+        underruns: this.underruns,
+        overflows: this.overflows,
+        corrections: this.corrections,
+        targetMs: Math.round((this.target / this.perMs))
+      })
+      this.underruns = 0
+      this.overflows = 0
+      this.corrections = 0
     }
     return true
   }
@@ -186,11 +263,27 @@ export async function createPcmTrack(
       targetMax: ms(TARGET_MAX_MS),
       targetStep: ms(TARGET_STEP_MS),
       slack: ms(TARGET_SLACK_MS),
+      driftMargin: ms(DRIFT_MARGIN_MS),
       fadeSamples: Math.round((sampleRate * FADE_MS) / 1000)
     }
   })
   const destination = context.createMediaStreamDestination()
   node.connect(destination)
+
+  node.port.onmessage = (event) => {
+    const health = event.data as {
+      underruns: number
+      overflows: number
+      corrections: number
+      targetMs: number
+    }
+    // Silence is the normal case and does not deserve a line.
+    if (health.underruns === 0 && health.overflows === 0) return
+    console.warn(
+      `[pcm] ${health.underruns} falhas, ${health.overflows} descartes, ` +
+        `${health.corrections} correcoes de relogio, almofada ${health.targetMs}ms`
+    )
+  }
 
   const track = destination.stream.getAudioTracks()[0]
 
