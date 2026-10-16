@@ -470,8 +470,14 @@ export class MeshSession {
         // pictures and produced a different answer on every screen. The
         // only choice worth offering is which one you can hear.
         if (!wasPublishing && nowPublishing) {
+          // Was there anything on the stage before this? Only then does a
+          // new broadcast get to fill it. Otherwise it arrives as what it
+          // is — a sound, a badge, and a panel in the grid — and whoever
+          // was mid-way through watching something stays there.
+          const stageWasEmpty = !this.anythingLive(message.id)
           this.requestStream(message.id)
           this.watch(message.id)
+          if (stageWasEmpty) this.focused = message.id
         }
         if (wasPublishing && !nowPublishing) {
           this.cancelRejoin(message.id)
@@ -946,27 +952,21 @@ export class MeshSession {
   /**
    * Start receiving someone's picture. Their voice was never gone.
    *
-   * Never starts the sound. Every broadcast opens silent, without
-   * exception — including the one that joins everybody automatically in a
-   * quiet room. Showing someone a picture they did not ask for costs them
-   * nothing; playing them audio they did not ask for interrupts whatever
-   * they were already listening to, and an app that does that once is an
-   * app people keep muted.
+   * Touches neither the focus nor the sound. Both were in here once and
+   * both were wrong: a friend going live while you were already watching
+   * someone would re-evaluate the layout and move you off what you had
+   * chosen — the stage changing under you because a THIRD party did
+   * something. Where you are looking is yours; this only makes the picture
+   * available.
    *
-   * Sound has exactly two switches, both of them yours: the speaker, and
-   * moving the volume.
+   * Sound has exactly two switches, both of them yours: opening a
+   * broadcast, and the speaker.
    */
   watch(peerId: string): void {
     const peer = this.peers.get(peerId)
     if (!peer || peer.watching) return
-    // Joining the FIRST broadcast fills the stage with it, because there is
-    // nothing to compare it to. Joining a second does not steal the stage
-    // from the first: two broadcasts means the grid, and which one to
-    // enlarge is a question only the viewer can answer.
-    const alreadyWatching = [...this.peers.values()].some((p) => p.watching)
     peer.watching = true
     peer.frozen = null
-    this.focused = alreadyWatching ? null : peerId
     // The tracks are already in their slots if the link is up; the publisher
     // simply stopped filling the video ones.
     peer.screen = peer.state.screen ? (peer.streams.get('screen') ?? null) : null
@@ -1275,6 +1275,21 @@ export class MeshSession {
     this.focused = peerId
     if (peerId !== null) this.listenTo(peerId)
     else this.emit()
+  }
+
+  /**
+   * Is anything at all on the stage right now, ours included?
+   *
+   * Only used to decide whether a new broadcast may take the stage by
+   * itself. A quiet room has nothing to interrupt; any other room does.
+   */
+  private anythingLive(exclude?: string): boolean {
+    if (this.local.screen !== null || this.local.camera !== null) return true
+    for (const peer of this.peers.values()) {
+      if (peer.info.id === exclude) continue
+      if (peer.state.screen || peer.state.camera) return true
+    }
+    return false
   }
 
   /** Step out of a broadcast: back to the grid, and silence it. */
