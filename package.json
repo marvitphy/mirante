@@ -1,6 +1,6 @@
 {
   "name": "tvmirante",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "Mirante — assistir junto, ao vivo, com os amigos. Compartilhamento de tela P2P em malha.",
   "main": "./out/main/index.js",
   "author": "Mirante",

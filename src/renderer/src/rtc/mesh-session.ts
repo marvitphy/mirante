@@ -147,6 +147,8 @@ export interface LocalPublish {
   mic: MediaStream | null
   screenLabel: string | null
   profile: ScreenProfileName
+  /** How many people currently have our picture open. Derived, not stored. */
+  watchers: number
 }
 
 export interface SessionSnapshot {
@@ -214,10 +216,28 @@ export class MeshSession {
     camera: null,
     mic: null,
     screenLabel: null,
-    profile: 'smooth'
+    profile: 'smooth',
+    watchers: 0
   }
 
   /** Set once per session, so a manual profile change is not fought over. */
+
+  /**
+   * How many people have our picture open.
+   *
+   * Since joining a broadcast became a choice, going live no longer means
+   * being seen. Without this the broadcaster cannot tell an audience of four
+   * from an audience of nobody — and talking to an empty room is a worse
+   * experience than the surprise that opt-in replaced.
+   */
+  private watcherCount(): number {
+    if (this.local.screen === null && this.local.camera === null) return 0
+    let count = 0
+    for (const peerId of this.publishers.keys()) {
+      if (!this.videoMuted.has(peerId)) count++
+    }
+    return count
+  }
 
   private snapshot: SessionSnapshot = this.buildSnapshot()
 
@@ -238,7 +258,7 @@ export class MeshSession {
       status: this.status,
       self: this.self,
       peers,
-      local: { ...this.local },
+      local: { ...this.local, watchers: this.watcherCount() },
       focused: this.focused,
       error: this.error,
       anyRelayed: peers.some((p) => p.stats.relayed)
@@ -887,9 +907,17 @@ export class MeshSession {
    * was live while showing nothing — recoverable only by leaving and coming
    * back, which is not a thing anyone should have to work out.
    */
-  /** Anyone sending a picture right now, whether or not we are watching. */
+  /**
+   * Anyone sending a picture right now, ourselves included.
+   *
+   * Our own broadcast counts, and leaving it out was a real hole: someone
+   * sharing their screen alone in a room was, by this count, a quiet room —
+   * so the moment a friend went live the sharer was pulled into watching
+   * them and their own preview vanished. The person most entitled not to be
+   * interrupted is the one already broadcasting.
+   */
   private liveCount(exclude?: string): number {
-    let count = 0
+    let count = this.local.screen !== null || this.local.camera !== null ? 1 : 0
     for (const peer of this.peers.values()) {
       if (peer.info.id === exclude) continue
       if (peer.state.screen || peer.state.camera) count++
@@ -927,6 +955,7 @@ export class MeshSession {
     peer.screen = peer.state.screen ? (peer.streams.get('screen') ?? null) : null
     peer.camera = peer.state.camera ? (peer.streams.get('camera') ?? null) : null
     this.signaling?.send({ t: 'watchVideo', to: peerId, video: true })
+    this.attachAudio(peer)
     this.emit()
     // The link usually already exists, carrying their voice. Only a peer we
     // somehow never connected to needs one built now.
@@ -949,10 +978,12 @@ export class MeshSession {
     // have nothing decoded in it yet and would draw black.
     peer.frozen = poster
     peer.watching = false
-    // The connection stays up and so does their voice. Only the picture
-    // stops, which is the part that costs the broadcaster bandwidth.
+    // The connection stays up and so does their voice. The picture and the
+    // sound of what they were showing both stop — that is the broadcast.
     peer.screen = null
     peer.camera = null
+    peer.streams.delete('screenAudio')
+    this.attachAudio(peer)
     this.signaling?.send({ t: 'watchVideo', to: peerId, video: false })
     if (this.focused === peerId) this.focused = null
     this.emit()
@@ -1045,11 +1076,15 @@ export class MeshSession {
 
   /** Point one link's slots at what we are publishing. Never throws. */
   private async syncLink(link: PeerLink): Promise<void> {
-    // Someone who stepped out of the picture still gets both audio slots.
-    const wantsVideo = !this.videoMuted.has(link.peerId)
-    const screen = wantsVideo ? (this.local.screen?.getVideoTracks()[0] ?? null) : null
-    const screenAudio = this.local.screen?.getAudioTracks()[0] ?? null
-    const camera = wantsVideo ? (this.local.camera?.getVideoTracks()[0] ?? null) : null
+    // Leaving a broadcast stops the broadcast — picture AND the sound of
+    // whatever is being shown. What it must never stop is the MICROPHONE:
+    // the game's audio is part of the thing you stepped away from, your
+    // friend's voice is not, and gating them together would mean the only
+    // way to stop watching someone was to stop hearing them.
+    const watching = !this.videoMuted.has(link.peerId)
+    const screen = watching ? (this.local.screen?.getVideoTracks()[0] ?? null) : null
+    const screenAudio = watching ? (this.local.screen?.getAudioTracks()[0] ?? null) : null
+    const camera = watching ? (this.local.camera?.getVideoTracks()[0] ?? null) : null
     const mic = this.local.mic?.getAudioTracks()[0] ?? null
 
     try {

@@ -7,7 +7,7 @@ import { JoinScreen } from './components/join-screen'
 import { MiranteRail } from './components/mirante-rail'
 import { CameraPicker } from './components/camera-picker'
 import { SettingsModal } from './components/settings-modal'
-import { MAX_PANELS, StageGrid } from './components/stage-grid'
+import { StageGrid } from './components/stage-grid'
 import { SourcePicker } from './components/source-picker'
 import { Stage, type ViewMode } from './components/stage'
 import { TitleBar } from './components/title-bar'
@@ -440,13 +440,37 @@ export function App(): JSX.Element {
     [snapshot.focused, snapshot.peers]
   )
 
-  /** Everyone whose broadcast you joined and who has a picture to give. */
-  const watched = useMemo(
-    () => snapshot.peers.filter((p) => p.watching && (p.screen !== null || p.camera !== null)),
-    [snapshot.peers]
-  )
-  // One broadcast fills the stage; several divide it, until you pick one.
-  const gridded = watched.length > 1 && focusedPeer === null
+  /**
+   * What the stage should show, derived rather than remembered.
+   *
+   * This used to hang off `focused` alone, and every path that could leave
+   * `focused` empty produced the same wrong answer: leaving the only live
+   * broadcast, or the grid collapsing to one, or an expanded panel ending,
+   * all landed on "o mirante está vazio" while somebody was plainly still
+   * broadcasting. Three bugs, one cause. Asking what exists instead of
+   * trusting a field to have been set removes the whole class.
+   */
+  const stage = useMemo(() => {
+    const live = snapshot.peers.filter((p) => p.state.screen || p.state.camera)
+    const watched = live.filter((p) => p.watching && (p.screen !== null || p.camera !== null))
+    const localStream = snapshot.local.screen
+    // Your own preview is a panel like any other: while watching friends you
+    // still want to see that what you are sending is what you meant to send.
+    const panels = watched.length + (localStream ? 1 : 0)
+
+    if (focusedPeer) return { kind: 'solo' as const, peer: focusedPeer, watched, localStream }
+    if (panels > 1) return { kind: 'grid' as const, peer: null, watched, localStream }
+    if (watched.length === 1) {
+      return { kind: 'solo' as const, peer: watched[0], watched, localStream }
+    }
+    // Nothing joined. If someone is broadcasting, offer it instead of
+    // pretending the room is empty.
+    const offer = live.find((p) => !p.watching) ?? null
+    return { kind: 'solo' as const, peer: localStream ? null : offer, watched, localStream }
+  }, [focusedPeer, snapshot.local.screen, snapshot.peers])
+
+  const watched = stage.watched
+  const gridded = stage.kind === 'grid'
 
   const nudgeVolume = useCallback(
     (delta: number) => {
@@ -472,7 +496,21 @@ export function App(): JSX.Element {
       () => ({
         f: () => setMode((m) => (m === 'fullscreen' ? 'normal' : 'fullscreen')),
         t: () => setMode((m) => (m === 'theater' ? 'normal' : 'theater')),
-        escape: () => setMode('normal'),
+        /**
+         * One step back, whatever the last step in was.
+         *
+         * Fullscreen and theatre both narrow the window; expanding a panel
+         * narrows the stage. Escape undoes the innermost one and stops
+         * there, so the key means the same thing at every depth instead of
+         * dropping you to the outside from wherever you happened to be.
+         */
+        escape: () => {
+          if (mode !== 'normal') {
+            setMode('normal')
+            return
+          }
+          if (focusedPeer && watched.length > 1) session.focus(null)
+        },
         m: () => {
           if (focusedPeer) {
             session.setPeerAudio(focusedPeer.info.id, { muted: !focusedPeer.audio.muted })
@@ -483,7 +521,7 @@ export function App(): JSX.Element {
         arrowright: () => cycleFocus(1),
         arrowleft: () => cycleFocus(-1)
       }),
-      [cycleFocus, focusedPeer, nudgeVolume]
+      [cycleFocus, focusedPeer, mode, nudgeVolume, watched.length]
     ),
     joined !== null
   )
@@ -593,7 +631,9 @@ export function App(): JSX.Element {
       <main className="tm-main" {...chrome.bind}>
         {gridded ? (
           <StageGrid
-            peers={watched.slice(0, MAX_PANELS)}
+            peers={watched}
+            localStream={stage.localStream}
+            localWatchers={snapshot.local.watchers}
             onExpand={(peerId) => session.focus(peerId)}
             onVolume={(peerId, volume) =>
               session.setPeerAudio(peerId, { volume, muted: false })
@@ -605,7 +645,8 @@ export function App(): JSX.Element {
           />
         ) : (
         <Stage
-          peer={focusedPeer}
+          peer={stage.peer}
+          watchers={snapshot.local.watchers}
           siblings={watched.length}
           onBackToGrid={() => session.focus(null)}
           localScreen={snapshot.local.screen}

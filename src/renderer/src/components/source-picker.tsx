@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 
+import { getSettings } from '../lib/settings'
 import type { CaptureSource } from '../../../main/capture'
 import type { AudioCapability } from '../../../main/process-audio'
 import { IconClose } from './icons'
@@ -40,7 +41,9 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
   )
   const [capability, setCapability] = useState<AudioCapability | null>(null)
   /** Sending sound is what people expect, so it starts on. */
-  const [sendAudio, setSendAudio] = useState(true)
+  // "Começar com som" in Settings. It was hardcoded to true, so the setting
+  // existed, saved, and changed nothing — the picker never read it.
+  const [sendAudio, setSendAudio] = useState(getSettings().shareWithSound)
 
   const visible = tab === 'screens' ? screens : windows
   const selectedSource = sources.find((s) => s.id === selected) ?? null

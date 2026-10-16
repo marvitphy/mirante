@@ -11,8 +11,8 @@ import type { PeerView } from '../rtc/mesh-session'
 import {
   IconCollapse,
   IconExpand,
+  IconGrid,
   IconLeave,
-  IconMinimize,
   IconSignal,
   IconTheater
 } from './icons'
@@ -39,6 +39,8 @@ interface StageProps {
   peer: PeerView | null
   /** Local preview, shown when nobody else is publishing. */
   localScreen: MediaStream | null
+  /** How many people have your broadcast open, when the broadcast is yours. */
+  watchers: number
   mode: ViewMode
   chromeVisible: boolean
   onModeChange: (mode: ViewMode) => void
@@ -58,6 +60,7 @@ interface StageProps {
 export function Stage({
   peer,
   localScreen,
+  watchers,
   mode,
   chromeVisible,
   onModeChange,
@@ -223,23 +226,53 @@ export function Stage({
               AO VIVO
             </span>
           )}
+
+          {/* Your own broadcast: say whether anyone is actually there.
+              Going live stopped meaning being seen the day joining became a
+              choice, and an empty room should not look like a full one. */}
+          {showingLocal && (
+            <span
+              className={`tm-audience${watchers === 0 ? ' is-empty' : ''}`}
+              title={
+                watchers === 0
+                  ? 'Ninguém abriu sua transmissão ainda'
+                  : `${watchers} ${watchers === 1 ? 'pessoa está vendo' : 'pessoas estão vendo'}`
+              }
+            >
+              {watchers === 0 ? 'ninguém assistindo' : `${watchers} assistindo`}
+            </span>
+          )}
           <span className="tm-stage__title">{title}</span>
           {peer && (
             <span className="tm-stage__elapsed num">{formatElapsed(peer.info.joinedAt)}</span>
           )}
         </div>
 
-        {stats && (
-          <button
-            type="button"
-            className={`tm-iconbtn${showStats ? ' is-active' : ''}`}
-            onClick={() => setShowStats((v) => !v)}
-            title="Telemetria · D"
-            aria-pressed={showStats}
-          >
-            <IconSignal size={16} />
-          </button>
-        )}
+        <div className="tm-stage__tools">
+          {peer?.watching && (
+            <button
+              type="button"
+              className="tm-stage__leave"
+              onClick={() => onLeave(capturePoster())}
+              title={`Parar de assistir ${peer.info.name} — a imagem congela e você volta quando quiser`}
+            >
+              <IconLeave size={14} />
+              Sair da live
+            </button>
+          )}
+
+          {stats && (
+            <button
+              type="button"
+              className={`tm-iconbtn${showStats ? ' is-active' : ''}`}
+              onClick={() => setShowStats((v) => !v)}
+              title="Telemetria · D"
+              aria-pressed={showStats}
+            >
+              <IconSignal size={16} />
+            </button>
+          )}
+        </div>
       </div>
 
       {showStats && stats && (
@@ -297,20 +330,8 @@ export function Stage({
             onClick={onBackToGrid}
             title={`Ver as ${siblings} transmissões lado a lado`}
           >
-            <IconMinimize size={14} />
+            <IconGrid size={14} />
             Ver todas
-          </button>
-        )}
-
-        {peer?.watching && (
-          <button
-            type="button"
-            className="tm-stage__leave"
-            onClick={() => onLeave(capturePoster())}
-            title={`Parar de assistir ${peer.info.name} — a imagem dele congela e você volta quando quiser`}
-          >
-            <IconLeave size={14} />
-            Sair da live
           </button>
         )}
 

@@ -544,3 +544,79 @@
     transition: none;
   }
 }
+
+/* --- your own panel ----------------------------------------------------- */
+/*
+ * Marked, because mixing it in unmarked would be worse than leaving it out:
+ * you would see your own screen among the others and spend a second working
+ * out which one is yours. The accent border says "this one is you".
+ */
+.tm-panel--mine {
+  border-color: hsl(from var(--accent) h s l / 0.5);
+}
+.tm-panel--mine .tm-panel__bar {
+  opacity: 1;
+  background: linear-gradient(to top, hsl(258 45% 1% / 0.8), transparent);
+}
+
+/* --- is anyone there? --------------------------------------------------- */
+/*
+ * Going live stopped meaning being seen the day joining became a choice.
+ * Empty is stated plainly rather than hidden — a broadcaster talking to
+ * nobody should find that out from the interface, not from the silence.
+ */
+.tm-audience {
+  flex: 0 0 auto;
+  padding: 1px var(--s-2);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-label);
+  white-space: nowrap;
+}
+.tm-audience.is-empty {
+  border-color: var(--rule);
+  color: var(--text-muted);
+}
+
+/* Leaving this person sits with the readings about this person, not among
+   the playback controls. Volume and fullscreen are about the picture; this
+   is about whether you are receiving it at all. */
+.tm-stage__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: 0 0 auto;
+}
+.tm-stage__top .tm-stage__tools {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.tm-stage__tools > * {
+  background: hsl(258 40% 2% / 0.88);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-plate);
+}
+
+/* Leaving this person belongs with the readings about this person, not among
+   the playback controls. Volume and fullscreen act on the picture; this acts
+   on whether you receive it at all. */
+.tm-stage__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: 0 0 auto;
+}
+.tm-stage__top > .tm-stage__tools {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.tm-stage__tools > * {
+  background: hsl(258 40% 2% / 0.88);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-plate);
+}

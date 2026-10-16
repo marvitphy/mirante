@@ -87,6 +87,33 @@ export const IconCollapse = (p: IconProps): JSX.Element => (
   </Icon>
 )
 
+/**
+ * Four panes and one pane: a pair, and the pair is the point.
+ *
+ * These two buttons swap the stage between several broadcasts and one, so
+ * each glyph is simply a picture of the layout it produces. The window
+ * chrome icons that were standing in here — minimise and maximise — describe
+ * what happens to a WINDOW, which is a different thing entirely and is why
+ * neither button read as what it did.
+ */
+export const IconGrid = (p: IconProps): JSX.Element => (
+  <Icon {...p}>
+    <rect x="3.5" y="3.5" width="7" height="7" />
+    <rect x="13.5" y="3.5" width="7" height="7" />
+    <rect x="3.5" y="13.5" width="7" height="7" />
+    <rect x="13.5" y="13.5" width="7" height="7" />
+  </Icon>
+)
+
+export const IconSolo = (p: IconProps): JSX.Element => (
+  <Icon {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" />
+    {/* Corner ticks: this pane is about to take the room. */}
+    <path d="M7 8.5h3M7 8.5v2.5" />
+    <path d="M17 15.5h-3M17 15.5v-2.5" />
+  </Icon>
+)
+
 export const IconTheater = (p: IconProps): JSX.Element => (
   <Icon {...p}>
     <rect x="2.5" y="6" width="19" height="12" rx="2" />

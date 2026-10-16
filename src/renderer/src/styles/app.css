@@ -551,3 +551,29 @@
     --side-w: 220px;
   }
 }
+
+/* --- theatre ----------------------------------------------------------- */
+/*
+ * Between normal and fullscreen. The window keeps its frame — you can still
+ * see your other windows, still alt-tab, still read the title bar — but the
+ * room's furniture steps aside and the picture takes the rest.
+ *
+ * It had a button from the beginning and did nothing at all: the class was
+ * applied and no rule ever matched it. A control that cannot be understood
+ * by pressing it is worse than no control.
+ */
+.tm-shell--theater.tm-shell--rail-right {
+  grid-template-columns: minmax(0, 1fr) 0;
+}
+.tm-shell--theater .tm-side,
+.tm-shell--theater .tm-rail {
+  display: none;
+}
+
+/* The dock STAYS. Hiding it took "stop sharing" away from the one person who
+   most needs it, leaving a broadcaster in theatre with no way out but a
+   control that fades on its own. Three steps, each removing exactly one
+   thing: theatre takes the people away, fullscreen takes the controls too. */
+.tm-shell--theater.tm-shell--rail-right .tm-dock {
+  grid-column: 1 / -1;
+}
