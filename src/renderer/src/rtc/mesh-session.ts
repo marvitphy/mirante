@@ -27,10 +27,10 @@ import { Signaling, type SignalingStatus } from './signaling'
  * Long enough for the publisher's ICE restarts to land first — rebuilding is
  * a visible interruption, restarting is not.
  */
-const REJOIN_AFTER_MS = 20_000
+const REJOIN_AFTER_MS = 45_000
 
 /** How long to wait for a `joinResponse` before asking again. */
-const JOIN_RETRY_MS = 6_000
+const JOIN_RETRY_MS = 10_000
 
 /** The slots that carry sound, in the order the mixer should receive them. */
 const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
@@ -639,6 +639,10 @@ export class MeshSession {
       const peer = this.peers.get(peerId)
       if (!peer || peer.link === 'live' || peer.link === 'closed') return
       if (!peer.state.screen && !peer.state.camera && !peer.state.mic) return
+      // Still interrupted after all this time, and the publisher's ICE
+      // restarts have had many attempts by now. Only here is rebuilding
+      // cheaper than waiting.
+      if (peer.link !== 'interrupted') return
 
       console.warn(`[rtc] ${peerId}: link nao voltou, pedindo o stream de novo`)
       this.viewers.get(peerId)?.close()
@@ -665,8 +669,11 @@ export class MeshSession {
       this.joinRetries.delete(peerId)
       const peer = this.peers.get(peerId)
       if (!peer) return
-      // Already watching, or they stopped publishing: nothing to chase.
-      if (peer.link === 'live' || peer.link === 'connecting') return
+      // A link exists, whatever shape it is in. Asking again would only make
+      // the publisher rebuild it, and a rebuild is a visible interruption
+      // where an ICE restart is not. Recovery of a link that exists belongs
+      // to the link.
+      if (this.viewers.has(peerId)) return
       if (!peer.state.screen && !peer.state.camera && !peer.state.mic) return
 
       console.warn(`[rtc] ${peerId}: sem resposta ao join, pedindo de novo`)
@@ -809,7 +816,20 @@ export class MeshSession {
       return
     }
 
-    this.publishers.get(peerId)?.close()
+    // A join for someone we are already streaming to is a duplicate, not a
+    // reason to start over. `join` is re-sent when a response goes missing,
+    // and the re-send can arrive after the original finally lands — tearing
+    // the connection down at that point stops a picture that was working and
+    // builds a new one in its place. From the room that looks exactly like
+    // the broadcaster quitting and starting again, which is what everyone
+    // was reacting to.
+    const current = this.publishers.get(peerId)
+    if (current && (current.state === 'live' || current.state === 'connecting')) {
+      console.warn(`[rtc] ${peerId}: join duplicado, mantendo o link que ja existe`)
+      return
+    }
+
+    current?.close()
     const link = this.makeLink(peerId, 'publisher')
     this.publishers.set(peerId, link)
     await this.flushCandidates(peerId + ':in', link)

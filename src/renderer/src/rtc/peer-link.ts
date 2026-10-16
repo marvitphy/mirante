@@ -187,6 +187,7 @@ export class PeerLink {
   private cursor: StatsCursor | null = null
   /** The most recent telemetry sample, for anyone who needs it on demand. */
   private latest: LinkStats = EMPTY_STATS
+  private lastState: LinkState = 'new'
   private makingOffer = false
   private closed = false
 
@@ -232,6 +233,11 @@ export class PeerLink {
     })
 
     this.startStats()
+  }
+
+  private emitState(state: LinkState): void {
+    this.lastState = state
+    this.options.onState(state)
   }
 
   private clearInterrupt(): void {
@@ -280,7 +286,7 @@ export class PeerLink {
       case 'connected':
         this.clearInterrupt()
         this.clearRecovery()
-        this.options.onState('live')
+        this.emitState('live')
         break
 
       case 'disconnected':
@@ -293,7 +299,7 @@ export class PeerLink {
           this.interruptTimer = window.setTimeout(() => {
             this.interruptTimer = null
             if (!this.closed && this.pc.connectionState !== 'connected') {
-              this.options.onState('interrupted')
+              this.emitState('interrupted')
             }
           }, INTERRUPT_GRACE_MS)
         }
@@ -303,18 +309,18 @@ export class PeerLink {
         // Failed does not heal by itself, so this one is immediate — and it
         // keeps retrying rather than restarting once and hoping.
         this.clearInterrupt()
-        this.options.onState('interrupted')
+        this.emitState('interrupted')
         this.scheduleRecovery()
         break
 
       case 'closed':
         this.clearInterrupt()
         this.clearRecovery()
-        this.options.onState('closed')
+        this.emitState('closed')
         break
 
       default:
-        this.options.onState('connecting')
+        this.emitState('connecting')
     }
   }
 
@@ -394,6 +400,16 @@ export class PeerLink {
    * profile's ceiling is a per-viewer figure that must be divided or three
    * friends will ask for three times the bandwidth one person has.
    */
+  /**
+   * What this link last reported.
+   *
+   * Lets a caller ask whether a connection is worth keeping before replacing
+   * it — the difference between recovering a stream and restarting one.
+   */
+  get state(): LinkState {
+    return this.lastState
+  }
+
   /** Most recent telemetry for this link. */
   get stats(): LinkStats {
     return this.latest
@@ -652,6 +668,6 @@ export class PeerLink {
     this.clearRecovery()
     this.slots.clear()
     this.pc.close()
-    this.options.onState('closed')
+    this.emitState('closed')
   }
 }
