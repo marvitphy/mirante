@@ -72,6 +72,8 @@ export function preferCodecs(transceiver: RTCRtpTransceiver, content: CodecConte
 export interface EncodingProfile {
   /** Bits per second ceiling for this track. */
   maxBitrate: number
+  /** Divide the captured resolution by this before encoding. 1 keeps it. */
+  scaleResolutionDownBy?: number
   maxFramerate?: number
   /**
    * What the encoder should assume it is looking at.
@@ -124,6 +126,7 @@ export const SCREEN_PROFILES = {
   crisp: {
     maxBitrate: 6_000_000,
     maxFramerate: 30,
+    scaleResolutionDownBy: 1,
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail'
   },
@@ -131,6 +134,7 @@ export const SCREEN_PROFILES = {
   smooth: {
     maxBitrate: 8_000_000,
     maxFramerate: 60,
+    scaleResolutionDownBy: 1,
     degradationPreference: 'maintain-framerate',
     contentHint: 'motion'
   },
@@ -138,6 +142,9 @@ export const SCREEN_PROFILES = {
   thrifty: {
     maxBitrate: 1_500_000,
     maxFramerate: 24,
+    // 1080p becomes 720p. At a tight bitrate a smaller picture that is
+    // actually sharp beats a large one made of blocks.
+    scaleResolutionDownBy: 1.5,
     degradationPreference: 'maintain-resolution',
     contentHint: 'detail'
   }
@@ -197,6 +204,13 @@ export async function applyProfile(
   for (const encoding of params.encodings) {
     encoding.maxBitrate = profile.maxBitrate
     if (profile.maxFramerate !== undefined) encoding.maxFramerate = profile.maxFramerate
+    // The lever that makes the profiles differ at the SAME bitrate. Without
+    // it, every profile sends 1080p and the only thing separating them is a
+    // ceiling the bandwidth governor has usually already clamped to one
+    // shared value — which is why switching quality appeared to do nothing.
+    if (profile.scaleResolutionDownBy !== undefined) {
+      encoding.scaleResolutionDownBy = profile.scaleResolutionDownBy
+    }
   }
   params.degradationPreference = profile.degradationPreference
   try {

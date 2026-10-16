@@ -1021,12 +1021,35 @@ export class MeshSession {
     const track = this.local.screen?.getVideoTracks()[0]
 
     if (track) {
+      const wanted = SCREEN_PROFILES[profile]
       // Apply to the local track first. With nobody watching there are no
       // senders to configure, but the hint still has to be right so the very
       // first viewer gets the profile you picked.
-      setContentHint(track, SCREEN_PROFILES[profile].contentHint)
+      setContentHint(track, wanted.contentHint)
+
+      // Change what the SOURCE produces too, not only what the encoder is
+      // allowed to do with it. Capture rate was fixed when the share opened,
+      // so picking "Fluido" mid-broadcast asked for 60 fps from a source
+      // still handing over 30 — a setting that could not take effect no
+      // matter how long anyone waited for it.
+      try {
+        await track.applyConstraints({
+          frameRate: { ideal: wanted.maxFramerate, max: wanted.maxFramerate }
+        })
+      } catch (error) {
+        // Some capture sources refuse to be reconfigured; the encoder-side
+        // limits below still apply.
+        console.warn('[rtc] fonte recusou a nova taxa de quadros:', error)
+      }
 
       for (const link of this.publishers.values()) await link.setScreenProfile(profile)
+
+      const settings = track.getSettings()
+      console.log(
+        `[rtc] perfil ${profile}: captura ${settings.width}x${settings.height} ` +
+          `@ ${Math.round(settings.frameRate ?? 0)}fps, ` +
+          `escala 1/${wanted.scaleResolutionDownBy ?? 1}`
+      )
     }
     this.emit()
   }
