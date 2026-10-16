@@ -121,6 +121,24 @@ export interface PeerView {
   camera: MediaStream | null
   /** One stream per slot, built from the tracks as they arrive. */
   streams: Map<SlotName, MediaStream>
+  /**
+   * Whether we are actually receiving this person's broadcast.
+   *
+   * Someone going live is news, not an instruction. Being yanked into a
+   * stream the moment a friend starts one is startling, costs bandwidth
+   * nobody asked to spend, and in a mesh it costs the BROADCASTER a full
+   * extra copy of their upload per viewer. So watching is something you
+   * choose — with one exception, in `shouldAutoWatch`.
+   */
+  watching: boolean
+  /**
+   * The last frame seen before leaving their stream, as a data URL.
+   *
+   * Leaving really does stop the media — that is the point. A frozen frame
+   * keeps the tile from going to a black rectangle, and shows what you would
+   * be returning to.
+   */
+  frozen: string | null
 }
 
 export interface LocalPublish {
@@ -172,6 +190,12 @@ export class MeshSession {
   private readonly rejoinTimers = new Map<string, number>()
   /** Pending re-ask for a `join` that was never answered. */
   private readonly joinRetries = new Map<string, number>()
+  /**
+   * Viewers who have stepped out of the picture but still hear us.
+   *
+   * Video is the expensive half and the half people choose; audio is neither.
+   */
+  private readonly videoMuted = new Set<string>()
   /** What each viewer has earned, in bits per second, keyed by peer id. */
   private readonly budgets = new Map<string, number>()
   /** Consecutive healthy samples per viewer, before asking for more. */
@@ -350,12 +374,22 @@ export class MeshSession {
         }
         this.collapseDuplicates()
         this.emit()
-        // Subscribe to everyone already publishing.
+        // Connect to everyone who is publishing, always: that is how their
+        // VOICE arrives, and you never opt out of hearing your friends.
         for (const peer of message.peers) {
           if (peer.state.screen || peer.state.camera || peer.state.mic) {
             this.requestStream(peer.id)
           }
         }
+
+        // The picture is the part you choose. Walking into a room with
+        // exactly one broadcast running is the same unambiguous case as a
+        // quiet room: there is one thing to look at. With two or more, pick
+        // nothing and let them choose.
+        const live = [...this.peers.values()].filter(
+          (peer) => peer.state.screen || peer.state.camera
+        )
+        if (live.length === 1) this.watch(live[0].info.id)
         break
       }
 
@@ -389,7 +423,15 @@ export class MeshSession {
         if (wasSharing && !message.state.screen) soundLiveEnd()
         const nowPublishing = message.state.screen || message.state.camera || message.state.mic
 
-        if (!wasPublishing && nowPublishing) this.requestStream(message.id)
+        // Going live is announced, not imposed. The sound and the badge
+        // already said so; whether to watch is the viewer's call, except in
+        // the quiet-room case.
+        if (!wasPublishing && nowPublishing) {
+          const quiet = this.shouldAutoWatch(message.id)
+          // Connect regardless — their voice is not optional.
+          this.requestStream(message.id)
+          if (quiet) this.watch(message.id)
+        }
         if (wasPublishing && !nowPublishing) {
           this.cancelRejoin(message.id)
           this.viewers.get(message.id)?.close()
@@ -401,6 +443,8 @@ export class MeshSession {
           peer.screen = null
           peer.camera = null
           peer.link = 'closed'
+          peer.watching = false
+          peer.frozen = null
           if (this.focused === message.id) this.focused = null
         }
         // A slot that is switched off keeps its transceiver and its track —
@@ -424,7 +468,9 @@ export class MeshSession {
 
         // Auto-promote the first screen share to the stage. Nobody should have
         // to hunt for the thing they came to watch.
-        if (message.state.screen && this.focused === null) this.focused = message.id
+        if (message.state.screen && peer.watching && this.focused === null) {
+          this.focused = message.id
+        }
         this.emit()
         break
       }
@@ -433,6 +479,14 @@ export class MeshSession {
       // TeamSpeak's `joinResponse` does it — saves a round trip.
       case 'join': {
         await this.publishTo(message.from)
+        break
+      }
+
+      case 'watchVideo': {
+        if (message.video) this.videoMuted.delete(message.from)
+        else this.videoMuted.add(message.from)
+        const link = this.publishers.get(message.from)
+        if (link) await this.syncLink(link)
         break
       }
 
@@ -468,7 +522,9 @@ export class MeshSession {
       audible: false,
       screen: null,
       camera: null,
-      streams: new Map()
+      streams: new Map(),
+      watching: false,
+      frozen: null
     }
   }
 
@@ -588,7 +644,9 @@ export class MeshSession {
           this.attachAudio(peer)
         }
 
-        if (this.focused === null && slot === 'screen') this.focused = peerId
+        if (this.focused === null && slot === 'screen' && peer.watching) {
+          this.focused = peerId
+        }
         this.emit()
       },
       onState: (state) => {
@@ -829,9 +887,84 @@ export class MeshSession {
    * was live while showing nothing — recoverable only by leaving and coming
    * back, which is not a thing anyone should have to work out.
    */
+  /** Anyone sending a picture right now, whether or not we are watching. */
+  private liveCount(exclude?: string): number {
+    let count = 0
+    for (const peer of this.peers.values()) {
+      if (peer.info.id === exclude) continue
+      if (peer.state.screen || peer.state.camera) count++
+    }
+    return count
+  }
+
+  /**
+   * The one case where we start watching without being asked.
+   *
+   * A quiet room is unambiguous: nobody else is on, so the person who just
+   * went live is the only thing to look at and making everyone click would
+   * be ceremony. The moment there is already someone live, the choice stops
+   * being obvious and belongs to the viewer — jumping between broadcasts on
+   * its own is exactly the startling behaviour this replaces.
+   */
+  private shouldAutoWatch(peerId: string): boolean {
+    return this.liveCount(peerId) === 0
+  }
+
+  /** Start receiving someone's picture. Their voice was never gone. */
+  watch(peerId: string): void {
+    const peer = this.peers.get(peerId)
+    if (!peer || peer.watching) return
+    // Joining the FIRST broadcast fills the stage with it, because there is
+    // nothing to compare it to. Joining a second does not steal the stage
+    // from the first: two broadcasts means the grid, and which one to
+    // enlarge is a question only the viewer can answer.
+    const alreadyWatching = [...this.peers.values()].some((p) => p.watching)
+    peer.watching = true
+    peer.frozen = null
+    this.focused = alreadyWatching ? null : peerId
+    // The tracks are already in their slots if the link is up; the publisher
+    // simply stopped filling the video ones.
+    peer.screen = peer.state.screen ? (peer.streams.get('screen') ?? null) : null
+    peer.camera = peer.state.camera ? (peer.streams.get('camera') ?? null) : null
+    this.signaling?.send({ t: 'watchVideo', to: peerId, video: true })
+    this.emit()
+    // The link usually already exists, carrying their voice. Only a peer we
+    // somehow never connected to needs one built now.
+    if (!this.viewers.has(peerId)) this.requestStream(peerId)
+  }
+
+  /**
+   * Stop receiving someone's broadcast, keeping the last frame.
+   *
+   * The link is genuinely torn down: in a mesh this hands bandwidth back to
+   * the person broadcasting, which is the whole reason leaving a stream is
+   * worth offering at all.
+   */
+  unwatch(peerId: string, poster: string | null = null): void {
+    const peer = this.peers.get(peerId)
+    if (!peer || !peer.watching) return
+
+    // The still comes from the caller because the caller owns the <video>
+    // that is actually rendering frames. A fresh element built here would
+    // have nothing decoded in it yet and would draw black.
+    peer.frozen = poster
+    peer.watching = false
+    // The connection stays up and so does their voice. Only the picture
+    // stops, which is the part that costs the broadcaster bandwidth.
+    peer.screen = null
+    peer.camera = null
+    this.signaling?.send({ t: 'watchVideo', to: peerId, video: false })
+    if (this.focused === peerId) this.focused = null
+    this.emit()
+  }
+
   private requestStream(peerId: string): void {
     this.cancelRejoin(peerId)
     this.scheduleJoinRetry(peerId)
+    // State the intent with the request, so a publisher never spends upload
+    // on a picture nobody opened.
+    const peer = this.peers.get(peerId)
+    this.signaling?.send({ t: 'watchVideo', to: peerId, video: peer?.watching ?? false })
     this.mixer.resume()
     this.signaling?.send({ t: 'join', to: peerId })
   }
@@ -912,9 +1045,11 @@ export class MeshSession {
 
   /** Point one link's slots at what we are publishing. Never throws. */
   private async syncLink(link: PeerLink): Promise<void> {
-    const screen = this.local.screen?.getVideoTracks()[0] ?? null
+    // Someone who stepped out of the picture still gets both audio slots.
+    const wantsVideo = !this.videoMuted.has(link.peerId)
+    const screen = wantsVideo ? (this.local.screen?.getVideoTracks()[0] ?? null) : null
     const screenAudio = this.local.screen?.getAudioTracks()[0] ?? null
-    const camera = this.local.camera?.getVideoTracks()[0] ?? null
+    const camera = wantsVideo ? (this.local.camera?.getVideoTracks()[0] ?? null) : null
     const mic = this.local.mic?.getAudioTracks()[0] ?? null
 
     try {

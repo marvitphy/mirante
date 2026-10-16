@@ -7,6 +7,7 @@ import { JoinScreen } from './components/join-screen'
 import { MiranteRail } from './components/mirante-rail'
 import { CameraPicker } from './components/camera-picker'
 import { SettingsModal } from './components/settings-modal'
+import { MAX_PANELS, StageGrid } from './components/stage-grid'
 import { SourcePicker } from './components/source-picker'
 import { Stage, type ViewMode } from './components/stage'
 import { TitleBar } from './components/title-bar'
@@ -439,6 +440,14 @@ export function App(): JSX.Element {
     [snapshot.focused, snapshot.peers]
   )
 
+  /** Everyone whose broadcast you joined and who has a picture to give. */
+  const watched = useMemo(
+    () => snapshot.peers.filter((p) => p.watching && (p.screen !== null || p.camera !== null)),
+    [snapshot.peers]
+  )
+  // One broadcast fills the stage; several divide it, until you pick one.
+  const gridded = watched.length > 1 && focusedPeer === null
+
   const nudgeVolume = useCallback(
     (delta: number) => {
       if (!focusedPeer) return
@@ -530,7 +539,16 @@ export function App(): JSX.Element {
       mirrorSelf={selfView?.flip ?? settings.mirrorSelf}
       position={settings.railPosition}
       mixer={session.audioMixer}
-      onFocus={(peerId) => session.focus(peerId)}
+      onFocus={(peerId) => {
+        // Clicking a broadcast you are not receiving is how you join it.
+        // Focusing something you cannot see would just show an empty stage.
+        const peer = peerId ? snapshot.peers.find((p) => p.info.id === peerId) : null
+        if (peer && !peer.watching && (peer.state.screen || peer.state.camera)) {
+          session.watch(peer.info.id)
+          return
+        }
+        session.focus(peerId)
+      }}
       onVolume={(peerId, volume) => session.setPeerAudio(peerId, { volume, muted: false })}
       onToggleMute={(peerId) => {
         const peer = snapshot.peers.find((p) => p.info.id === peerId)
@@ -573,13 +591,34 @@ export function App(): JSX.Element {
           `bottom` is the player-style arrangement: both float over the video
           and disappear together while you watch. */}
       <main className="tm-main" {...chrome.bind}>
+        {gridded ? (
+          <StageGrid
+            peers={watched.slice(0, MAX_PANELS)}
+            onExpand={(peerId) => session.focus(peerId)}
+            onVolume={(peerId, volume) =>
+              session.setPeerAudio(peerId, { volume, muted: false })
+            }
+            onToggleMute={(peerId) => {
+              const peer = snapshot.peers.find((p) => p.info.id === peerId)
+              if (peer) session.setPeerAudio(peerId, { muted: !peer.audio.muted })
+            }}
+          />
+        ) : (
         <Stage
           peer={focusedPeer}
+          siblings={watched.length}
+          onBackToGrid={() => session.focus(null)}
           localScreen={snapshot.local.screen}
           mode={mode}
           chromeVisible={chrome.visible}
           onModeChange={setMode}
           onHold={chrome.hold}
+          onWatch={() => {
+            if (focusedPeer) session.watch(focusedPeer.info.id)
+          }}
+          onLeave={(poster) => {
+            if (focusedPeer) session.unwatch(focusedPeer.info.id, poster)
+          }}
           onVolume={(volume) => {
             if (focusedPeer) {
               session.setPeerAudio(focusedPeer.info.id, { volume, muted: false })
@@ -591,6 +630,7 @@ export function App(): JSX.Element {
             }
           }}
         />
+        )}
 
         {settings.railPosition === 'bottom' && rail}
       </main>

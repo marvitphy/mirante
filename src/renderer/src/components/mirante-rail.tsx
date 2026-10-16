@@ -214,6 +214,9 @@ function PeerTile({
   const ringRef = useRef<HTMLSpanElement>(null)
   const [open, setOpen] = useState(false)
   const live = peer.link === 'live'
+  // Broadcasting, but we are not receiving it. An offer, not a picture — and
+  // deliberately NOT the red tally, which means "you are on air".
+  const inviting = !peer.watching && (peer.state.screen || peer.state.camera)
   // Anything other than "normal, audible" stays visible without hovering, so
   // you can see that you turned someone down three days ago.
   const touched = peer.audible && (peer.audio.muted || peer.audio.volume !== 1)
@@ -239,11 +242,18 @@ function PeerTile({
       hue={peer.info.hue}
       stream={peer.camera}
       active={active}
-      label={`Ver ${peer.info.name}`}
+      label={inviting ? `Assistir ${peer.info.name}` : `Ver ${peer.info.name}`}
       onFocus={onFocus}
       corner={
         peer.state.screen ? (
-          <span className="tm-tile__badge" title="Transmitindo a tela">
+          <span
+            className={`tm-tile__badge${inviting ? ' is-inviting' : ''}`}
+            title={
+              inviting
+                ? `${peer.info.name} está transmitindo — clique pra assistir`
+                : 'Transmitindo a tela'
+            }
+          >
             <IconScreen size={12} />
           </span>
         ) : undefined
@@ -251,6 +261,15 @@ function PeerTile({
       slot={<SignalMeter stats={peer.stats} live={live} />}
     >
       <span ref={ringRef} className="tm-tile__ring" aria-hidden="true" />
+
+      {inviting && (
+        <span className="tm-tile__invite" aria-hidden="true">
+          {peer.frozen ? (
+            <img className="tm-tile__frozen" src={peer.frozen} alt="" />
+          ) : null}
+          <span className="tm-tile__invite-label label">ao vivo</span>
+        </span>
+      )}
 
       {/* A SPEAKER, never a microphone. This changes how loud they are in YOUR
           ears only — a mic icon reads as "mute their microphone for everyone",

@@ -218,6 +218,18 @@ export class Room extends DurableObject<Env> {
         if (target) this.send(target.socket, { t: 'join', from: self.info.id })
         break
       }
+      case 'watchVideo': {
+        const target = this.peers().find((p) => p.data.info.id === msg.to)
+        if (target) {
+          this.send(target.socket, {
+            t: 'watchVideo',
+            from: self.info.id,
+            video: msg.video
+          })
+        }
+        break
+      }
+
       case 'leaveStream': {
         const target = this.peers().find((p) => p.data.info.id === msg.to)
         if (target) this.send(target.socket, { t: 'leaveStream', from: self.info.id })

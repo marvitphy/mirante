@@ -19,7 +19,15 @@ export interface PeerAudio {
   muted: boolean
 }
 
-export const DEFAULT_PEER_AUDIO: PeerAudio = { volume: 1, muted: false }
+/**
+ * Where a person starts, before you have an opinion about them.
+ *
+ * A quarter, not full. A broadcast arriving at full volume over whatever you
+ * were already listening to is startling, and turning something down after it
+ * has already made you jump is too late. Quiet is easy to undo; loud is not.
+ * Your own setting for someone survives and overrides this.
+ */
+export const DEFAULT_PEER_AUDIO: PeerAudio = { volume: 0.25, muted: false }
 
 /**
  * One incoming audio stream, wired into its peer's channel.

@@ -85,6 +85,16 @@ export type ClientMessage =
   /** Ask a publisher for its stream. The publisher answers with `joinResponse`. */
   | { t: 'join'; to: PeerId }
   | { t: 'leaveStream'; to: PeerId }
+  /**
+   * Whether we want this publisher's PICTURE. Their voice always comes.
+   *
+   * Leaving someone's broadcast must not deafen them — in a room built for
+   * watching things together, you always want to hear your friends and only
+   * sometimes want to see their screen. So the link stays up for audio and
+   * only the video slots are gated, which also hands the publisher back a
+   * full copy of their upload for every viewer who stepped out.
+   */
+  | { t: 'watchVideo'; to: PeerId; video: boolean }
   | { t: 'signal'; to: PeerId; dir: StreamDir; payload: SignalPayload }
   | { t: 'ping'; ts: number }
   /**
@@ -110,6 +120,7 @@ export type ServerMessage =
   | { t: 'peerState'; id: PeerId; state: PeerPublishState }
   | { t: 'join'; from: PeerId }
   | { t: 'leaveStream'; from: PeerId }
+  | { t: 'watchVideo'; from: PeerId; video: boolean }
   | { t: 'signal'; from: PeerId; dir: StreamDir; payload: SignalPayload }
   | { t: 'pong'; ts: number }
   | { t: 'error'; code: string; message: string }

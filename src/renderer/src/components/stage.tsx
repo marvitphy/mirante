@@ -8,7 +8,14 @@ import {
   formatResolution
 } from '../lib/format'
 import type { PeerView } from '../rtc/mesh-session'
-import { IconCollapse, IconExpand, IconSignal, IconTheater } from './icons'
+import {
+  IconCollapse,
+  IconExpand,
+  IconLeave,
+  IconMinimize,
+  IconSignal,
+  IconTheater
+} from './icons'
 import { Logo } from './logo'
 import { SignalMeter } from './signal-meter'
 import { VolumeSlider } from './volume-slider'
@@ -39,6 +46,13 @@ interface StageProps {
   onToggleMute: () => void
   /** Pin the chrome open while a popover is on screen. */
   onHold: (held: boolean) => void
+  /** Start receiving the focused person's broadcast. */
+  onWatch: () => void
+  /** Stop receiving it, handing back the still that was on screen. */
+  onLeave: (poster: string | null) => void
+  /** How many broadcasts are joined, so the way back to the grid can appear. */
+  siblings: number
+  onBackToGrid: () => void
 }
 
 export function Stage({
@@ -49,7 +63,11 @@ export function Stage({
   onModeChange,
   onVolume,
   onToggleMute,
-  onHold
+  onHold,
+  onWatch,
+  onLeave,
+  siblings,
+  onBackToGrid
 }: StageProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -66,7 +84,9 @@ export function Stage({
   // stream, which is before any track of theirs has arrived, and until then
   // `peer.screen` is null. The screen you were sharing simply vanished from
   // your own window while everyone else watched it fine.
-  const remote = peer ? (peer.screen ?? peer.camera) : null
+  // Someone broadcasting that you have not joined is an offer, not a picture.
+  const invited = peer !== null && !peer.watching && (peer.state.screen || peer.state.camera)
+  const remote = peer?.watching ? (peer.screen ?? peer.camera) : null
   const stream = remote ?? localScreen
   const showingLocal = remote === null && localScreen !== null
   const live = remote !== null ? peer?.link === 'live' : localScreen !== null
@@ -112,9 +132,50 @@ export function Stage({
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [mode, onModeChange])
 
+  /** The frame currently on screen, for the tile to keep while you are away. */
+  const capturePoster = (): string | null => {
+    const video = videoRef.current
+    if (!video || !video.videoWidth) return null
+    try {
+      const scale = Math.min(1, 640 / video.videoWidth)
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(video.videoWidth * scale)
+      canvas.height = Math.round(video.videoHeight * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL('image/jpeg', 0.7)
+    } catch {
+      // A still is a nicety; never let it stop someone leaving.
+      return null
+    }
+  }
+
   const toggleFullscreen = (): void =>
     onModeChange(mode === 'fullscreen' ? 'normal' : 'fullscreen')
   const toggleTheater = (): void => onModeChange(mode === 'theater' ? 'normal' : 'theater')
+
+  // The last frame of a broadcast you stepped out of, so the stage shows
+  // what you would be going back to instead of a black rectangle.
+  if (invited && peer) {
+    return (
+      <div className="tm-stage tm-stage--invite" ref={containerRef}>
+        {peer.frozen && <img className="tm-stage__frozen" src={peer.frozen} alt="" />}
+        <div className="tm-invite">
+          <span className="tm-invite__live">
+            <span className="tm-invite__lamp" />
+            {peer.info.name} está transmitindo
+          </span>
+          <button type="button" className="tm-btn tm-btn--primary" onClick={onWatch}>
+            Assistir
+          </button>
+          <span className="tm-invite__hint label">
+            {peer.frozen ? 'você saiu dessa transmissão' : 'nada é baixado até você entrar'}
+          </span>
+        </div>
+      </div>
+    )
+  }
 
   if (!stream) {
     return (
@@ -228,6 +289,30 @@ export function Stage({
         )}
 
         <div className="tm-stage__spacer" />
+
+        {siblings > 1 && (
+          <button
+            type="button"
+            className="tm-stage__leave"
+            onClick={onBackToGrid}
+            title={`Ver as ${siblings} transmissões lado a lado`}
+          >
+            <IconMinimize size={14} />
+            Ver todas
+          </button>
+        )}
+
+        {peer?.watching && (
+          <button
+            type="button"
+            className="tm-stage__leave"
+            onClick={() => onLeave(capturePoster())}
+            title={`Parar de assistir ${peer.info.name} — a imagem dele congela e você volta quando quiser`}
+          >
+            <IconLeave size={14} />
+            Sair da live
+          </button>
+        )}
 
         <button
           type="button"
