@@ -1016,10 +1016,18 @@ export class MeshSession {
     peer.watching = false
     // The connection stays up and so does their voice. The picture and the
     // sound of what they were showing both stop — that is the broadcast.
+    //
+    // The cached slot streams are NOT dropped, and that is the whole point.
+    // They were, once, and it cost the audio permanently: the link stays
+    // alive here on purpose, so when the publisher refills the slot it does
+    // so with `replaceTrack`, which fires no `ontrack`. Anything thrown away
+    // while the link lives is never handed over again. Leaving and rejoining
+    // a broadcast brought the picture back and left it silent forever.
+    //
+    // Nothing needed throwing away in the first place: the publisher stops
+    // sending, and the gain is already at zero.
     peer.screen = null
     peer.camera = null
-    peer.streams.delete('screenAudio')
-    this.attachAudio(peer)
     this.signaling?.send({ t: 'watchVideo', to: peerId, video: false })
     if (this.focused === peerId) this.focused = null
     if (this.listening === peerId) this.listenTo(null)

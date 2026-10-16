@@ -545,7 +545,7 @@ export function App(): JSX.Element {
             setMode('normal')
             return
           }
-          if (focusedPeer && watched.length > 1) session.focus(null)
+          if (focusedPeer) session.focus(null)
         },
         m: () => {
           if (onStage) {
