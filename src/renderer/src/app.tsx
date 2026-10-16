@@ -691,11 +691,8 @@ export function App(): JSX.Element {
           chromeVisible={chrome.visible}
           onModeChange={setMode}
           onHold={chrome.hold}
-          onWatch={() => {
-            if (onStage) session.watch(onStage.info.id)
-          }}
-          onLeave={(poster) => {
-            if (onStage) session.unwatch(onStage.info.id, poster)
+          onLeave={() => {
+            if (onStage) session.leaveBroadcast(onStage.info.id)
           }}
           onVolume={(volume) => {
             if (onStage) setStageVolume(onStage.info.id, volume)

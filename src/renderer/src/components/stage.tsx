@@ -50,10 +50,8 @@ interface StageProps {
   onToggleMute: () => void
   /** Pin the chrome open while a popover is on screen. */
   onHold: (held: boolean) => void
-  /** Start receiving the focused person's broadcast. */
-  onWatch: () => void
-  /** Stop receiving it, handing back the still that was on screen. */
-  onLeave: (poster: string | null) => void
+  /** Step out of this broadcast: back to the grid, and silence it. */
+  onLeave: () => void
   /** How many broadcasts are joined, so the way back to the grid can appear. */
   siblings: number
   onBackToGrid: () => void
@@ -72,7 +70,6 @@ export function Stage({
   onVolume,
   onToggleMute,
   onHold,
-  onWatch,
   onLeave,
   siblings,
   onBackToGrid,
@@ -94,9 +91,7 @@ export function Stage({
   // stream, which is before any track of theirs has arrived, and until then
   // `peer.screen` is null. The screen you were sharing simply vanished from
   // your own window while everyone else watched it fine.
-  // Someone broadcasting that you have not joined is an offer, not a picture.
-  const invited = peer !== null && !peer.watching && (peer.state.screen || peer.state.camera)
-  const remote = peer?.watching ? (peer.screen ?? peer.camera) : null
+  const remote = peer ? (peer.screen ?? peer.camera) : null
   const stream = remote ?? localScreen
   const showingLocal = remote === null && localScreen !== null
   const live = remote !== null ? peer?.link === 'live' : localScreen !== null
@@ -142,69 +137,12 @@ export function Stage({
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [mode, onModeChange])
 
-  /** The frame currently on screen, for the tile to keep while you are away. */
-  const capturePoster = (): string | null => {
-    const video = videoRef.current
-    if (!video || !video.videoWidth) return null
-    try {
-      const scale = Math.min(1, 640 / video.videoWidth)
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.round(video.videoWidth * scale)
-      canvas.height = Math.round(video.videoHeight * scale)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return null
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      return canvas.toDataURL('image/jpeg', 0.7)
-    } catch {
-      // A still is a nicety; never let it stop someone leaving.
-      return null
-    }
-  }
-
   const toggleFullscreen = (): void =>
     onModeChange(mode === 'fullscreen' ? 'normal' : 'fullscreen')
   const toggleTheater = (): void => onModeChange(mode === 'theater' ? 'normal' : 'theater')
 
   // The last frame of a broadcast you stepped out of, so the stage shows
   // what you would be going back to instead of a black rectangle.
-  if (invited && peer) {
-    const showing = peer.state.screenLabel ?? (peer.state.screen ? 'a tela' : 'a câmera')
-    return (
-      <div className="tm-stage tm-stage--invite" ref={containerRef}>
-        {/* The card is a preview of a broadcast, so the broadcast is the
-            hero and the words are the caption. Without a still there is
-            nothing to show yet, and the person's own colour standing in for
-            it is more honest than a stock glyph pretending to be content. */}
-        <button type="button" className="tm-invite" onClick={onWatch}>
-          <span className="tm-invite__poster">
-            {peer.frozen ? (
-              <img className="tm-invite__still" src={peer.frozen} alt="" />
-            ) : (
-              <span
-                className="tm-invite__blank"
-                style={{ background: `hsl(${peer.info.hue} 45% 16%)` }}
-              >
-                <span style={{ color: `hsl(${peer.info.hue} 70% 72%)` }}>
-                  {peer.info.name.slice(0, 1).toUpperCase()}
-                </span>
-              </span>
-            )}
-            <span className="tm-invite__lamp" aria-hidden="true" />
-          </span>
-
-          <span className="tm-invite__text">
-            <span className="tm-invite__who">{peer.info.name}</span>
-            <span className="tm-invite__what">
-              {peer.frozen ? `você saiu · ${showing}` : `está mostrando ${showing}`}
-            </span>
-          </span>
-
-          <span className="tm-invite__go">Assistir</span>
-        </button>
-      </div>
-    )
-  }
-
   if (!stream) {
     return (
       <div className="tm-stage tm-stage--empty" ref={containerRef}>
@@ -274,12 +212,12 @@ export function Stage({
         </div>
 
         <div className="tm-stage__tools">
-          {peer?.watching && (
+          {peer && (
             <button
               type="button"
               className="tm-stage__leave"
-              onClick={() => onLeave(capturePoster())}
-              title={`Parar de assistir ${peer.info.name} — a imagem congela e você volta quando quiser`}
+              onClick={onLeave}
+              title={`Sair da transmissão de ${peer.info.name} — volta pra grade e silencia`}
             >
               <IconLeave size={14} />
               Sair da live

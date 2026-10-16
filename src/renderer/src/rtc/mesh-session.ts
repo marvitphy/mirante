@@ -464,11 +464,14 @@ export class MeshSession {
         // Going live is announced, not imposed. The sound and the badge
         // already said so; whether to watch is the viewer's call, except in
         // the quiet-room case.
+        // Everything happening in the room is on the stage. Deciding
+        // whether to SEE each broadcast turned out to be a choice nobody
+        // wanted to make: it left people looking at cards instead of
+        // pictures and produced a different answer on every screen. The
+        // only choice worth offering is which one you can hear.
         if (!wasPublishing && nowPublishing) {
-          const quiet = this.shouldAutoWatch(message.id)
-          // Connect regardless — their voice is not optional.
           this.requestStream(message.id)
-          if (quiet) this.watch(message.id)
+          this.watch(message.id)
         }
         if (wasPublishing && !nowPublishing) {
           this.cancelRejoin(message.id)
@@ -920,6 +923,15 @@ export class MeshSession {
     })
     this.mixer.attach(peer.info.id, streams)
     peer.audible = this.mixer.isAudible(peer.info.id)
+
+    // Re-state the whole rule after every rebuild.
+    //
+    // A channel is rebuilt whenever a track arrives, and each rebuild sets
+    // its own gain from a set that is only read, never re-checked against
+    // the others. Saying it again here means there is exactly one place
+    // that decides who is audible, and it cannot be out of date — which is
+    // how someone ended up hearing a broadcast they had not chosen.
+    this.mixer.setContentFocus(this.listening)
   }
 
   /**
@@ -931,37 +943,6 @@ export class MeshSession {
    * was live while showing nothing — recoverable only by leaving and coming
    * back, which is not a thing anyone should have to work out.
    */
-  /**
-   * Anyone sending a picture right now, ourselves included.
-   *
-   * Our own broadcast counts, and leaving it out was a real hole: someone
-   * sharing their screen alone in a room was, by this count, a quiet room —
-   * so the moment a friend went live the sharer was pulled into watching
-   * them and their own preview vanished. The person most entitled not to be
-   * interrupted is the one already broadcasting.
-   */
-  private liveCount(exclude?: string): number {
-    let count = this.local.screen !== null || this.local.camera !== null ? 1 : 0
-    for (const peer of this.peers.values()) {
-      if (peer.info.id === exclude) continue
-      if (peer.state.screen || peer.state.camera) count++
-    }
-    return count
-  }
-
-  /**
-   * The one case where we start watching without being asked.
-   *
-   * A quiet room is unambiguous: nobody else is on, so the person who just
-   * went live is the only thing to look at and making everyone click would
-   * be ceremony. The moment there is already someone live, the choice stops
-   * being obvious and belongs to the viewer — jumping between broadcasts on
-   * its own is exactly the startling behaviour this replaces.
-   */
-  private shouldAutoWatch(peerId: string): boolean {
-    return this.liveCount(peerId) === 0
-  }
-
   /**
    * Start receiving someone's picture. Their voice was never gone.
    *
@@ -1005,6 +986,7 @@ export class MeshSession {
    * the person broadcasting, which is the whole reason leaving a stream is
    * worth offering at all.
    */
+  /** @deprecated Watching is no longer optional; only the sound is. */
   unwatch(peerId: string, poster: string | null = null): void {
     const peer = this.peers.get(peerId)
     if (!peer || !peer.watching) return
@@ -1278,16 +1260,28 @@ export class MeshSession {
    * profile deliberately after this fired, we leave their choice alone.
    */
   /**
-   * Fill the stage with one broadcast, or go back to the grid.
+   * Go into a broadcast, or step back out to the grid.
    *
-   * Layout only. Enlarging a picture is not a request to hear it — the two
-   * were tied together at first and it meant a click to see something
-   * better also started playing it, which is the same ambush in a smaller
-   * form. Whatever you were listening to keeps playing.
+   * Going IN turns its sound on: opening someone's broadcast is a request
+   * to watch it, and a picture you opened on purpose arriving silent is
+   * just one more thing to click.
+   *
+   * Stepping back out does NOT turn it off. Escape is about the layout —
+   * you wanted the others in view again, not to stop listening to this
+   * one. Stopping is `leaveBroadcast`: a different button saying a
+   * different thing.
    */
   focus(peerId: string | null): void {
     this.focused = peerId
-    this.emit()
+    if (peerId !== null) this.listenTo(peerId)
+    else this.emit()
+  }
+
+  /** Step out of a broadcast: back to the grid, and silence it. */
+  leaveBroadcast(peerId: string): void {
+    if (this.focused === peerId) this.focused = null
+    if (this.listening === peerId) this.listenTo(null)
+    else this.emit()
   }
 
   /**
