@@ -153,6 +153,8 @@ export interface LocalPublish {
 
 export interface SessionSnapshot {
   status: SignalingStatus
+  /** Whose broadcast you can hear, if any. */
+  listening: string | null
   self: PeerInfo | null
   peers: PeerView[]
   local: LocalPublish
@@ -239,6 +241,9 @@ export class MeshSession {
     return count
   }
 
+  /** Whose broadcast audio is playing. Voices are never gated by this. */
+  private listening: string | null = null
+
   private snapshot: SessionSnapshot = this.buildSnapshot()
 
   // --- React integration --------------------------------------------------
@@ -260,6 +265,7 @@ export class MeshSession {
       peers,
       local: { ...this.local, watchers: this.watcherCount() },
       focused: this.focused,
+      listening: this.listening,
       error: this.error,
       anyRelayed: peers.some((p) => p.stats.relayed)
     }
@@ -402,14 +408,15 @@ export class MeshSession {
           }
         }
 
-        // The picture is the part you choose. Walking into a room with
-        // exactly one broadcast running is the same unambiguous case as a
-        // quiet room: there is one thing to look at. With two or more, pick
-        // nothing and let them choose.
-        const live = [...this.peers.values()].filter(
-          (peer) => peer.state.screen || peer.state.camera
-        )
-        if (live.length === 1) this.watch(live[0].info.id)
+        // Walking in shows you everything already happening — a room you
+        // just entered should not be a list of invitations to things you
+        // cannot see. What it does not do is play any of it: sound is the
+        // part you point at, one broadcast at a time.
+        for (const peer of this.peers.values()) {
+          if (peer.state.screen || peer.state.camera) {
+            this.watch(peer.info.id, { listen: false })
+          }
+        }
         break
       }
 
@@ -466,6 +473,7 @@ export class MeshSession {
           peer.watching = false
           peer.frozen = null
           if (this.focused === message.id) this.focused = null
+          if (this.listening === message.id) this.listenTo(null)
         }
         // A slot that is switched off keeps its transceiver and its track —
         // that is the whole point of fixed slots, and why turning a camera off
@@ -891,9 +899,14 @@ export class MeshSession {
   }
 
   private attachAudio(peer: PeerView): void {
-    const streams = AUDIO_SLOTS.map((slot) => peer.streams.get(slot)).filter(
-      (stream): stream is MediaStream => stream !== undefined
-    )
+    const streams = AUDIO_SLOTS.flatMap((slot) => {
+      const stream = peer.streams.get(slot)
+      if (!stream) return []
+      // The microphone is a voice and is always heard; the screen's audio is
+      // part of a broadcast and is heard only when that broadcast has the
+      // stage.
+      return [{ stream, kind: slot === 'mic' ? ('voice' as const) : ('content' as const) }]
+    })
     this.mixer.attach(peer.info.id, streams)
     peer.audible = this.mixer.isAudible(peer.info.id)
   }
@@ -938,8 +951,15 @@ export class MeshSession {
     return this.liveCount(peerId) === 0
   }
 
-  /** Start receiving someone's picture. Their voice was never gone. */
-  watch(peerId: string): void {
+  /**
+   * Start receiving someone's picture. Their voice was never gone.
+   *
+   * `listen` is separate on purpose. Walking into a room should show you
+   * everything that is happening and play none of it: four broadcasts
+   * arriving at once is not a welcome, it is an ambush. Sound is the part
+   * you point at.
+   */
+  watch(peerId: string, { listen = true }: { listen?: boolean } = {}): void {
     const peer = this.peers.get(peerId)
     if (!peer || peer.watching) return
     // Joining the FIRST broadcast fills the stage with it, because there is
@@ -949,7 +969,10 @@ export class MeshSession {
     const alreadyWatching = [...this.peers.values()].some((p) => p.watching)
     peer.watching = true
     peer.frozen = null
-    this.focused = alreadyWatching ? null : peerId
+    if (listen) {
+      this.focused = alreadyWatching ? null : peerId
+      this.listenTo(peerId)
+    }
     // The tracks are already in their slots if the link is up; the publisher
     // simply stopped filling the video ones.
     peer.screen = peer.state.screen ? (peer.streams.get('screen') ?? null) : null
@@ -986,6 +1009,7 @@ export class MeshSession {
     this.attachAudio(peer)
     this.signaling?.send({ t: 'watchVideo', to: peerId, video: false })
     if (this.focused === peerId) this.focused = null
+    if (this.listening === peerId) this.listenTo(null)
     this.emit()
   }
 
@@ -1232,8 +1256,29 @@ export class MeshSession {
    * Only ever downgrades: if someone already chose `thrifty`, or picked a
    * profile deliberately after this fired, we leave their choice alone.
    */
+  /**
+   * Fill the stage with one broadcast, or go back to the grid.
+   *
+   * Enlarging something is also a statement about wanting to hear it, so
+   * this carries the sound along. Going back to the grid leaves the sound
+   * where it was: you were listening to someone a moment ago and the layout
+   * changing is not a reason to stop.
+   */
   focus(peerId: string | null): void {
     this.focused = peerId
+    if (peerId !== null) this.listenTo(peerId)
+    this.emit()
+  }
+
+  /**
+   * Choose whose broadcast you can hear. At most one, `null` for none.
+   *
+   * Separate from focus because in a grid you watch several and listen to
+   * one, and those are different choices. Voices are untouched either way.
+   */
+  listenTo(peerId: string | null): void {
+    this.listening = peerId
+    this.mixer.setContentFocus(peerId)
     this.emit()
   }
 

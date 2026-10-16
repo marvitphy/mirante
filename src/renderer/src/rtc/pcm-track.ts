@@ -1,234 +1,56 @@
 /**
- * Turns the PCM stream coming from the native per-process capturer back into a
+ * Turns the PCM stream coming from the native per-process capturer into a
  * `MediaStreamTrack` that WebRTC can send.
  *
- * The native side (src/main/process-audio.ts) hands us interleaved f32 frames
- * over IPC. We buffer them and play them out through a ScriptProcessor-free
- * path: a `MediaStreamAudioDestinationNode` fed by an AudioWorklet.
+ * ## Why there is no AudioContext here any more
  *
- * A jitter cushion is unavoidable here because IPC delivery is bursty while
- * audio playout is not. It is a real buffer, not a hope: playout waits until
- * the cushion has filled, and refills it after a dropout instead of limping
- * along one sample from empty. Without that, every hiccup in the main process
- * — and the main process does other things — came out as a click.
+ * The first three versions of this file were an AudioWorklet feeding a
+ * `MediaStreamAudioDestinationNode`, and all three crackled. Each round found
+ * a real defect — a mixing loop that consumed slower than it produced, a
+ * cushion that filled gaps with silence instead of easing out of them, two
+ * clocks drifting apart with nothing reconciling them — and fixing each one
+ * changed the texture of the problem without ending it.
+ *
+ * The reason is structural. An AudioWorklet runs on the renderer's audio
+ * thread, on a deadline: 128 frames must be produced every 2.7 ms or the
+ * output has a hole in it. That thread lives in the same process that is
+ * encoding 1080p60 video, in software, because Chromium exposes no hardware
+ * encoder to WebRTC here. Under that load the deadline is missed, and no
+ * amount of buffering upstream fixes a consumer that stops consuming — it
+ * only decides whether the hole is filled with silence, a fade, or a repeat.
+ *
+ * `MediaStreamTrackGenerator` removes the deadline instead of padding it.
+ * Audio is handed over as timestamped `AudioData` and the track carries it;
+ * nothing has to wake up on time, so nothing can be late. The capture clock
+ * becomes the track's clock, which is also the honest answer to drift: there
+ * is now only one clock on this side, and WebRTC's receiver already has
+ * NetEq for the other.
+ *
+ * What is gone with it: the worklet, the jitter buffer, the adaptive target,
+ * the drift correction, and the fade. None of them were wrong. They were all
+ * compensating for a scheduling problem that no longer exists.
  */
 
 /**
- * Jitter buffer shape, after reading how Discord's engine does it.
- *
- * `discord_voice.node` is libwebrtc, and its audio playout runs through
- * NetEq (`modules/audio_coding/neteq/*` survives in the binary, alongside a
- * `setMinimumOutputDelay` knob exposed all the way up to JavaScript). The
- * thing worth copying is not the algorithm but its two principles:
- *
- *   - The target delay ADAPTS. It is not a constant chosen once by whoever
- *     wrote the file; it grows on a machine that keeps starving and settles
- *     back down on one that does not.
- *   - Running dry never produces a hole. NetEq time-stretches. The previous
- *     version here re-primed on every underrun, which meant each hiccup
- *     turned into a flat 60 ms of silence — louder and more noticeable than
- *     the glitch it was trying to prevent. That is the "mau contato".
- *
- * This is not NetEq; there is no WSOLA here. It takes the two principles and
- * nothing else: an adaptive target, and a short fade instead of a cliff.
+ * Chromium ships these without TypeScript DOM definitions. Only the parts
+ * used here are declared.
  */
-
-/** Starting cushion. Raised automatically when this machine cannot hold it. */
-const TARGET_START_MS = 80
-/** Never cushion less than this, nor more. */
-const TARGET_MIN_MS = 60
-const TARGET_MAX_MS = 320
-/** Added to the target each time playout runs dry. */
-const TARGET_STEP_MS = 30
-/** Backlog beyond the target that is simply too much delay to carry. */
-const TARGET_SLACK_MS = 160
-/** Fade applied when the buffer runs dry, instead of jumping to zero. */
-const FADE_MS = 4
-
-/**
- * How far the backlog may sit from its target before the rate is nudged.
- *
- * The capture clock and the playback clock are different pieces of hardware
- * that both call themselves 48 kHz. They are not, quite, and the difference
- * accumulates: one direction drains the buffer until it underruns, the other
- * fills it until the oldest audio is discarded. Both are audible, and an
- * adaptive target does not help — it changes how often the artefact happens,
- * not whether it happens.
- *
- * NetEq's answer is to stretch time continuously. This is the cheap version
- * of the same idea: once the backlog has drifted past this margin, drop or
- * repeat exactly ONE frame per render quantum. That is a 0.8% correction
- * against a drift measured in hundredths of a percent, applied a frame at a
- * time, and a single frame at 48 kHz is 20 microseconds — far below anything
- * a person can hear. Drift stops accumulating, so it never reaches the point
- * of becoming a gap.
- */
-const DRIFT_MARGIN_MS = 12
-
-const WORKLET_SOURCE = `
-class PcmQueueProcessor extends AudioWorkletProcessor {
-  constructor(options) {
-    super()
-    const o = options.processorOptions
-    this.perMs = o.perMs
-    this.target = o.targetStart
-    this.targetMin = o.targetMin
-    this.targetMax = o.targetMax
-    this.targetStep = o.targetStep
-    this.slack = o.slack
-    this.fadeSamples = o.fadeSamples
-
-    this.queue = []
-    this.offset = 0
-    this.queued = 0
-    this.priming = true
-    // Last sample per channel, so a fade starts from where the audio was
-    // rather than from wherever zero happens to be.
-    this.tail = new Float32Array(8)
-    this.fadeLeft = 0
-    this.cleanQuanta = 0
-    this.driftMargin = o.driftMargin
-    this.underruns = 0
-    this.overflows = 0
-    this.corrections = 0
-    this.reportAt = 0
-
-    this.port.onmessage = (event) => {
-      if (event.data === 'flush') {
-        this.queue = []
-        this.offset = 0
-        this.queued = 0
-        this.priming = true
-        return
-      }
-      const chunk = new Float32Array(event.data)
-      this.queue.push(chunk)
-      this.queued += chunk.length
-
-      // Too far behind to be worth keeping: this is delay, not safety.
-      const ceiling = this.target + this.slack
-      while (this.queued > ceiling && this.queue.length > 1) {
-        const old = this.queue.shift()
-        this.queued -= old.length - this.offset
-        this.offset = 0
-        this.overflows++
-      }
-    }
-  }
-
-  // Hold the previous value and bleed it out. Four milliseconds of decay is
-  // inaudible; a step to zero is a click, and that click is the complaint.
-  fade(output, channels, from, to) {
-    for (let frame = from; frame < to; frame++) {
-      const k = this.fadeLeft > 0 ? this.fadeLeft / this.fadeSamples : 0
-      for (let c = 0; c < channels; c++) output[c][frame] = this.tail[c] * k
-      if (this.fadeLeft > 0) this.fadeLeft--
-    }
-  }
-
-  // Advance past one frame without emitting it. Used to shed drift.
-  skipFrame(channels) {
-    if (this.queue.length === 0) return
-    const chunk = this.queue[0]
-    this.offset += channels
-    this.queued -= channels
-    if (this.offset >= chunk.length) {
-      this.queue.shift()
-      this.offset = 0
-    }
-  }
-
-  process(_inputs, outputs) {
-    const output = outputs[0]
-    const channels = output.length
-    const frames = output[0].length
-
-    if (this.priming) {
-      if (this.queued < this.target) {
-        this.fade(output, channels, 0, frames)
-        return true
-      }
-      this.priming = false
-      this.cleanQuanta = 0
-    }
-
-    // Correct the clocks before reading, never by more than a frame.
-    //
-    // Too full: shed one frame. Too empty: emit the previous frame twice, by
-    // simply not advancing after it is written. Either way the backlog walks
-    // back toward its target instead of running to one of the two edges.
-    let repeatFrame = false
-    const drift = this.queued - this.target
-    if (drift > this.driftMargin) {
-      this.skipFrame(channels)
-      this.corrections++
-    } else if (drift < -this.driftMargin && this.queue.length > 0) {
-      repeatFrame = true
-      this.corrections++
-    }
-
-    for (let frame = 0; frame < frames; frame++) {
-      if (this.queue.length === 0) {
-        // Ran dry. Raise the cushion — this machine has told us the current
-        // one is not enough — and ease out rather than cutting.
-        this.underruns++
-        this.target = Math.min(this.targetMax, this.target + this.targetStep)
-        this.fadeLeft = this.fadeSamples
-        this.fade(output, channels, frame, frames)
-        this.priming = true
-        return true
-      }
-
-      const chunk = this.queue[0]
-      for (let c = 0; c < channels; c++) {
-        const v = chunk[this.offset + c] ?? 0
-        output[c][frame] = v
-        this.tail[c] = v
-      }
-
-      // Hold position for exactly one frame when we are running short; the
-      // same twenty microseconds of audio simply plays twice.
-      if (repeatFrame) {
-        repeatFrame = false
-        continue
-      }
-
-      this.offset += channels
-      this.queued -= channels
-      if (this.offset >= chunk.length) {
-        this.queue.shift()
-        this.offset = 0
-      }
-    }
-
-    // A long clean run means the cushion is larger than this machine needs,
-    // and cushion is latency. Give it back slowly — far more slowly than it
-    // was taken, so one good minute cannot undo what a bad second taught us.
-    this.cleanQuanta++
-    if (this.cleanQuanta > 1500) {
-      this.cleanQuanta = 0
-      this.target = Math.max(this.targetMin, this.target - this.perMs)
-    }
-
-    // Say what actually happened, so the next report of crackling is a
-    // reading instead of an argument.
-    if (currentTime > this.reportAt) {
-      this.reportAt = currentTime + 15
-      this.port.postMessage({
-        underruns: this.underruns,
-        overflows: this.overflows,
-        corrections: this.corrections,
-        targetMs: Math.round((this.target / this.perMs))
-      })
-      this.underruns = 0
-      this.overflows = 0
-      this.corrections = 0
-    }
-    return true
-  }
+declare class MediaStreamTrackGenerator extends MediaStreamTrack {
+  constructor(init: { kind: 'audio' | 'video' })
+  readonly writable: WritableStream<AudioData>
 }
-registerProcessor('pcm-queue', PcmQueueProcessor)
-`
+
+declare class AudioData {
+  constructor(init: {
+    format: 'f32'
+    sampleRate: number
+    numberOfFrames: number
+    numberOfChannels: number
+    timestamp: number
+    data: Float32Array
+  })
+  close(): void
+}
 
 export interface PcmTrackHandle {
   track: MediaStreamTrack
@@ -241,61 +63,77 @@ export async function createPcmTrack(
   sampleRate: number,
   channels: number
 ): Promise<PcmTrackHandle> {
-  const context = new AudioContext({ sampleRate, latencyHint: 'interactive' })
-  const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' })
-  const url = URL.createObjectURL(blob)
-  try {
-    await context.audioWorklet.addModule(url)
-  } finally {
-    URL.revokeObjectURL(url)
-  }
+  const generator = new MediaStreamTrackGenerator({ kind: 'audio' })
+  const writer = generator.writable.getWriter()
 
-  const ms = (value: number): number => Math.round((sampleRate * value) / 1000) * channels
+  /**
+   * Frames handed over so far, which is what the timestamps are built from.
+   *
+   * Counting rather than reading a clock is deliberate: it makes the
+   * timeline exactly as long as the audio actually is. A wall clock would
+   * drift against the capture device and leave gaps or overlaps that the
+   * receiver would then have to paper over.
+   */
+  let framesWritten = 0
+  let closed = false
+  let dropped = 0
+  let reported = 0
 
-  const node = new AudioWorkletNode(context, 'pcm-queue', {
-    numberOfInputs: 0,
-    numberOfOutputs: 1,
-    outputChannelCount: [channels],
-    processorOptions: {
-      perMs: Math.round(sampleRate / 1000) * channels,
-      targetStart: ms(TARGET_START_MS),
-      targetMin: ms(TARGET_MIN_MS),
-      targetMax: ms(TARGET_MAX_MS),
-      targetStep: ms(TARGET_STEP_MS),
-      slack: ms(TARGET_SLACK_MS),
-      driftMargin: ms(DRIFT_MARGIN_MS),
-      fadeSamples: Math.round((sampleRate * FADE_MS) / 1000)
-    }
-  })
-  const destination = context.createMediaStreamDestination()
-  node.connect(destination)
-
-  node.port.onmessage = (event) => {
-    const health = event.data as {
-      underruns: number
-      overflows: number
-      corrections: number
-      targetMs: number
-    }
-    // Silence is the normal case and does not deserve a line.
-    if (health.underruns === 0 && health.overflows === 0) return
-    console.warn(
-      `[pcm] ${health.underruns} falhas, ${health.overflows} descartes, ` +
-        `${health.corrections} correcoes de relogio, almofada ${health.targetMs}ms`
-    )
-  }
-
-  const track = destination.stream.getAudioTracks()[0]
+  /**
+   * Writes are serialised through one chain.
+   *
+   * `write` resolves when the track has taken the data, and overlapping
+   * writes are not allowed on a single writer. Chaining keeps the IPC
+   * callback non-blocking while still respecting that.
+   */
+  let chain: Promise<void> = Promise.resolve()
 
   return {
-    track,
-    stream: destination.stream,
-    push: (chunk) => node.port.postMessage(chunk, [chunk]),
+    track: generator,
+    stream: new MediaStream([generator]),
+
+    push: (chunk) => {
+      if (closed) return
+      const samples = new Float32Array(chunk)
+      const frames = Math.floor(samples.length / channels)
+      if (frames === 0) return
+
+      const timestamp = Math.round((framesWritten / sampleRate) * 1_000_000)
+      framesWritten += frames
+
+      chain = chain
+        .then(async () => {
+          if (closed) return
+          const data = new AudioData({
+            format: 'f32',
+            sampleRate,
+            numberOfFrames: frames,
+            numberOfChannels: channels,
+            timestamp,
+            data: samples
+          })
+          try {
+            await writer.write(data)
+          } finally {
+            data.close()
+          }
+        })
+        .catch(() => {
+          // A refused write means the track is going away, or the consumer
+          // is gone. Count it; never let it break the chain for the rest.
+          dropped++
+          if (dropped - reported >= 50) {
+            reported = dropped
+            console.warn(`[pcm] ${dropped} blocos recusados pela track`)
+          }
+        })
+    },
+
     close: () => {
-      node.port.postMessage('flush')
-      node.disconnect()
-      void context.close()
-      track.stop()
+      if (closed) return
+      closed = true
+      void chain.then(() => writer.close()).catch(() => undefined)
+      generator.stop()
     }
   }
 }

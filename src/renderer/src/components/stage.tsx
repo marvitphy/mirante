@@ -161,21 +161,39 @@ export function Stage({
   // The last frame of a broadcast you stepped out of, so the stage shows
   // what you would be going back to instead of a black rectangle.
   if (invited && peer) {
+    const showing = peer.state.screenLabel ?? (peer.state.screen ? 'a tela' : 'a câmera')
     return (
       <div className="tm-stage tm-stage--invite" ref={containerRef}>
-        {peer.frozen && <img className="tm-stage__frozen" src={peer.frozen} alt="" />}
-        <div className="tm-invite">
-          <span className="tm-invite__live">
-            <span className="tm-invite__lamp" />
-            {peer.info.name} está transmitindo
+        {/* The card is a preview of a broadcast, so the broadcast is the
+            hero and the words are the caption. Without a still there is
+            nothing to show yet, and the person's own colour standing in for
+            it is more honest than a stock glyph pretending to be content. */}
+        <button type="button" className="tm-invite" onClick={onWatch}>
+          <span className="tm-invite__poster">
+            {peer.frozen ? (
+              <img className="tm-invite__still" src={peer.frozen} alt="" />
+            ) : (
+              <span
+                className="tm-invite__blank"
+                style={{ background: `hsl(${peer.info.hue} 45% 16%)` }}
+              >
+                <span style={{ color: `hsl(${peer.info.hue} 70% 72%)` }}>
+                  {peer.info.name.slice(0, 1).toUpperCase()}
+                </span>
+              </span>
+            )}
+            <span className="tm-invite__lamp" aria-hidden="true" />
           </span>
-          <button type="button" className="tm-btn tm-btn--primary" onClick={onWatch}>
-            Assistir
-          </button>
-          <span className="tm-invite__hint label">
-            {peer.frozen ? 'você saiu dessa transmissão' : 'nada é baixado até você entrar'}
+
+          <span className="tm-invite__text">
+            <span className="tm-invite__who">{peer.info.name}</span>
+            <span className="tm-invite__what">
+              {peer.frozen ? `você saiu · ${showing}` : `está mostrando ${showing}`}
+            </span>
           </span>
-        </div>
+
+          <span className="tm-invite__go">Assistir</span>
+        </button>
       </div>
     )
   }

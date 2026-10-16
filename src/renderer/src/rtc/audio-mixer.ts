@@ -37,8 +37,12 @@ export const DEFAULT_PEER_AUDIO: PeerAudio = { volume: 0.25, muted: false }
  * gain node, because `createMediaStreamSource` reads only the FIRST audio
  * track of a stream. Putting both in one MediaStream silently drops one.
  */
+/** What a stream carries, because the two are governed differently. */
+export type AudioKind = 'voice' | 'content'
+
 interface Input {
   stream: MediaStream
+  kind: AudioKind
   source: MediaStreamAudioSourceNode
   /** Kept alive so Chromium does not garbage-collect the receiver's stream. */
   sink: HTMLAudioElement
@@ -46,7 +50,18 @@ interface Input {
 
 interface Channel {
   inputs: Input[]
+  /** Everything this person sends, after the per-person volume. */
   gain: GainNode
+  /**
+   * The sound of what they are SHOWING, before it reaches `gain`.
+   *
+   * Two broadcasts playing their own audio at once is noise, not choice —
+   * no multiview player does it. So content audio follows the stage: the
+   * broadcast filling the screen is the one you hear, and in the grid none
+   * of them talks over the others. Voice never passes through here, because
+   * which friend you can hear is not a layout question.
+   */
+  content: GainNode
   analyser: AnalyserNode
   buffer: Float32Array<ArrayBuffer>
 }
@@ -64,6 +79,8 @@ export class AudioMixer {
    * slider sat frozen because the session had nothing to store.
    */
   private readonly settings = new Map<string, PeerAudio>()
+  /** Whose content audio is allowed through. At most one. */
+  private readonly contentOn = new Set<string>()
   private masterVolume = 1
   private outputDevice = ''
 
@@ -97,14 +114,16 @@ export class AudioMixer {
    * microphone on, the last arrival was a silent track that wiped the screen
    * audio. Viewers watched the picture and heard nothing.
    */
-  attach(peerId: string, streams: MediaStream[]): void {
-    const live = streams.filter((stream) => stream.getAudioTracks().length > 0)
+  attach(peerId: string, streams: Array<{ stream: MediaStream; kind: AudioKind }>): void {
+    const live = streams.filter((entry) => entry.stream.getAudioTracks().length > 0)
     if (live.length === 0) {
       this.detach(peerId)
       return
     }
 
+    const wasAudible = this.contentOn.has(peerId)
     this.detach(peerId)
+    if (wasAudible) this.contentOn.add(peerId)
 
     const context = this.ensureContext()
     const gain = context.createGain()
@@ -116,9 +135,13 @@ export class AudioMixer {
     gain.connect(analyser)
     if (this.master) gain.connect(this.master)
 
-    const inputs = live.map((stream) => {
+    const content = context.createGain()
+    content.gain.value = this.contentOn.has(peerId) ? 1 : 0
+    content.connect(gain)
+
+    const inputs = live.map(({ stream, kind }) => {
       const source = context.createMediaStreamSource(stream)
-      source.connect(gain)
+      source.connect(kind === 'content' ? content : gain)
 
       // Chromium will not pull from a MediaStreamAudioSourceNode unless the
       // underlying stream is also consumed by a media element. Muted so it
@@ -130,7 +153,7 @@ export class AudioMixer {
       void sink.play().catch(() => undefined)
       if (this.outputDevice) void this.applySink(sink)
 
-      return { stream, source, sink }
+      return { stream, kind, source, sink }
     })
 
     // Re-apply whatever this peer was already set to.
@@ -140,9 +163,31 @@ export class AudioMixer {
     this.channels.set(peerId, {
       inputs,
       gain,
+      content,
       analyser,
       buffer: new Float32Array(analyser.fftSize)
     })
+  }
+
+  /**
+   * Who, if anyone, gets to play the sound of what they are showing.
+   *
+   * `null` silences every broadcast's content while leaving all voices
+   * untouched — which is what the grid wants.
+   */
+  setContentFocus(peerId: string | null): void {
+    this.contentOn.clear()
+    if (peerId !== null) this.contentOn.add(peerId)
+
+    for (const [id, channel] of this.channels) {
+      const target = this.contentOn.has(id) ? 1 : 0
+      if (!this.context) {
+        channel.content.gain.value = target
+        continue
+      }
+      // A short ramp: switching the stage should not click.
+      channel.content.gain.setTargetAtTime(target, this.context.currentTime, 0.02)
+    }
   }
 
   detach(peerId: string): void {
@@ -150,6 +195,7 @@ export class AudioMixer {
     if (!channel) return
     try {
       for (const input of channel.inputs) input.source.disconnect()
+      channel.content.disconnect()
       channel.gain.disconnect()
       channel.analyser.disconnect()
     } catch {

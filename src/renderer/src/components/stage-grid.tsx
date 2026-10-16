@@ -2,7 +2,7 @@ import { useEffect, useRef, type JSX } from 'react'
 
 import { formatMs } from '../lib/format'
 import type { PeerView } from '../rtc/mesh-session'
-import { IconSolo } from './icons'
+import { IconSolo, IconVolume, IconVolumeOff } from './icons'
 import { VolumeSlider } from './volume-slider'
 
 /**
@@ -36,6 +36,10 @@ interface StageGridProps {
    */
   localStream: MediaStream | null
   localWatchers: number
+  /** Whose broadcast you can hear, if any. */
+  listening: string | null
+  /** Hear this one instead, or `null` for none. */
+  onListen: (peerId: string | null) => void
   /** Fill the stage with one of them. `null` means your own. */
   onExpand: (peerId: string | null) => void
   onVolume: (peerId: string, volume: number) => void
@@ -46,6 +50,8 @@ export function StageGrid({
   peers,
   localStream,
   localWatchers,
+  listening,
+  onListen,
   onExpand,
   onVolume,
   onToggleMute
@@ -69,6 +75,8 @@ export function StageGrid({
         <Panel
           key={peer.info.id}
           peer={peer}
+          hearing={listening === peer.info.id}
+          onListen={() => onListen(listening === peer.info.id ? null : peer.info.id)}
           onExpand={() => onExpand(peer.info.id)}
           onVolume={(volume) => onVolume(peer.info.id, volume)}
           onToggleMute={() => onToggleMute(peer.info.id)}
@@ -133,11 +141,15 @@ function LocalPanel({
 
 function Panel({
   peer,
+  hearing,
+  onListen,
   onExpand,
   onVolume,
   onToggleMute
 }: {
   peer: PeerView
+  hearing: boolean
+  onListen: () => void
   onExpand: () => void
   onVolume: (volume: number) => void
   onToggleMute: () => void
@@ -189,6 +201,23 @@ function Panel({
           {peer.info.name}
         </span>
         <span className="tm-panel__ping num">{formatMs(peer.stats.rttMs)}</span>
+
+        {/* Which broadcast you are listening to. Several pictures at once is
+            useful; several soundtracks at once is noise, so exactly one of
+            these is ever lit. */}
+        <button
+          type="button"
+          className={`tm-panel__listen${hearing ? ' is-on' : ''}`}
+          onClick={onListen}
+          aria-pressed={hearing}
+          title={
+            hearing
+              ? `Você está ouvindo ${peer.info.name} — clique pra silenciar`
+              : `Ouvir o som de ${peer.info.name}`
+          }
+        >
+          {hearing ? <IconVolume size={13} /> : <IconVolumeOff size={13} />}
+        </button>
         <VolumeSlider
           volume={peer.audio.volume}
           muted={peer.audio.muted}

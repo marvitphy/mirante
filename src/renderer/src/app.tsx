@@ -634,6 +634,8 @@ export function App(): JSX.Element {
             peers={watched}
             localStream={stage.localStream}
             localWatchers={snapshot.local.watchers}
+            listening={snapshot.listening}
+            onListen={(peerId) => session.listenTo(peerId)}
             onExpand={(peerId) => session.focus(peerId)}
             onVolume={(peerId, volume) =>
               session.setPeerAudio(peerId, { volume, muted: false })

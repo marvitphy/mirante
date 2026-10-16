@@ -342,42 +342,130 @@
   pointer-events: none;
 }
 
+/*
+ * A broadcast you have not joined, offered rather than started.
+ *
+ * Built as a preview card: the picture is the subject and the words are its
+ * caption. The first version centred a sentence in the middle of an empty
+ * stage, which said what was happening and showed nothing of it — the one
+ * thing a person deciding whether to watch actually wants.
+ *
+ * The whole card is the button. A separate "Assistir" control beside an
+ * inert thumbnail would make people aim at the smaller of two targets that
+ * do the same thing.
+ */
 .tm-invite {
   position: relative;
   z-index: 1;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: var(--s-4);
-  padding: var(--s-6) var(--s-7);
-  background: hsl(258 40% 2% / 0.9);
+  gap: var(--s-5);
+  width: min(560px, 82%);
+  padding: var(--s-4);
+  text-align: left;
+  cursor: pointer;
+  background: hsl(258 40% 3% / 0.94);
   border: 1px solid var(--rule);
   box-shadow: var(--shadow-pop);
-  text-align: center;
+  transition:
+    border-color var(--t-pop) var(--ease-out),
+    transform var(--t-pop) var(--ease-out);
+}
+.tm-invite:hover,
+.tm-invite:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-1px);
 }
 
-.tm-invite__live {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-2);
+.tm-invite__poster {
+  position: relative;
+  flex: 0 0 auto;
+  width: 148px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--rule);
+}
+
+.tm-invite__still {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* No still yet. Their own colour and initial, rather than a glyph standing
+   in for content that does not exist. */
+.tm-invite__blank {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--text-h2);
+  font-weight: 700;
+}
+
+/* Lilac, not the red tally. Red means "you are on air"; this is an offer. */
+.tm-invite__lamp {
+  position: absolute;
+  top: var(--s-2);
+  left: var(--s-2);
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px hsl(258 40% 3% / 0.8);
+  animation: tm-tally 2s var(--ease-out) infinite;
+}
+
+.tm-invite__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.tm-invite__who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--text-h4);
   font-weight: 600;
   letter-spacing: var(--tracking-tight);
   color: var(--text-primary);
 }
 
-/* Lilac, not the red tally. Red says "you are on air"; this says "there is
-   something here if you want it". Different meaning, different colour. */
-.tm-invite__lamp {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-full);
-  background: var(--accent);
-  animation: tm-tally 2s var(--ease-out) infinite;
+.tm-invite__what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
 }
 
-.tm-invite__hint {
-  color: var(--text-muted);
+.tm-invite__go {
+  flex: 0 0 auto;
+  padding: 0 var(--s-4);
+  height: var(--control-h);
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--accent-ink, #140c1f);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-invite {
+    transition: none;
+  }
+  .tm-invite:hover {
+    transform: none;
+  }
+  .tm-invite__lamp {
+    animation: none;
+  }
 }
 
 /* --- stepping out ------------------------------------------------------ */
@@ -619,4 +707,35 @@
   background: hsl(258 40% 2% / 0.88);
   border: 1px solid var(--rule);
   box-shadow: var(--shadow-plate);
+}
+
+/* Which broadcast you are hearing.
+   Exactly one of these is ever lit, because several soundtracks at once is
+   noise rather than choice. Off is the resting state — walking into a room
+   shows you everything and plays none of it. */
+.tm-panel__listen {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  color: var(--text-muted);
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  transition:
+    color var(--t-pop) var(--ease-out),
+    border-color var(--t-pop) var(--ease-out);
+}
+.tm-panel__listen:hover {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+.tm-panel__listen.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tm-panel__listen {
+    transition: none;
+  }
 }
