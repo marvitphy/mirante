@@ -848,18 +848,34 @@ export class MeshSession {
     // confirmation that you are actually live.
     if (!this.local.screen && stream) soundLiveStart()
     if (this.local.screen && !stream) soundLiveEnd()
-    this.local.screen?.getTracks().forEach((t) => t.stop())
+
+    const previous = this.local.screen
     this.local.screen = stream
     this.local.screenLabel = label
+
     if (stream) {
       // The OS "stop sharing" affordance ends the track behind our back.
+      //
+      // The guard is the important part. Changing source installs a new
+      // stream while the old one is still alive, and the old track ends
+      // moments later — asynchronously, and with its listener still
+      // attached. Unguarded, that listener tore down the share that had just
+      // replaced it: the source change appeared to do nothing, and the only
+      // way back was to leave and rejoin.
       stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+        if (this.local.screen !== stream) return
         void this.setScreen(null, null)
       })
     }
+
     this.announce()
     this.emit()
     await this.syncTracks()
+
+    // Only now. Stopping the old tracks first left every sender holding a
+    // dead track for the length of the swap, which viewers saw as the
+    // picture freezing before it came back — when it came back.
+    previous?.getTracks().forEach((t) => t.stop())
   }
 
   /**
