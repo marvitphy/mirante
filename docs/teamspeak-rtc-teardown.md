@@ -624,3 +624,118 @@ Verified against Microsoft and Chromium sources:
   frames, which is precisely the Discord shape.
 - macOS note: WKWebView does **not** support `getDisplayMedia`, so any webview-side capture
   plan is Windows-only by construction.
+
+---
+
+## A.6 Second pass on `discord_voice.node` — the control surface, and what it fixed here
+
+The first pass answered *how Discord encodes*. This one went after the layer above it:
+the JavaScript API the native engine exposes, which is readable in full at
+`modules/discord_voice-1/discord_voice/index.js` without any disassembly. An API surface
+is a confession — every callback exists because something went wrong often enough to
+need reporting.
+
+### A.6.1 Liveness is measured, never inferred
+
+```js
+setPingInterval: (interval) => instance.setPingInterval(interval),
+setPingCallback: (callback) => instance.setPingCallback(callback),
+setPingTimeoutCallback: (callback) => instance.setPingTimeoutCallback(callback),
+configureConnectionRetries: (baseDelay, maxDelay, maxAttempts) => ...,
+fastUdpReconnect: () => instance.fastUdpReconnect(),
+setUdpEndpoint: (address, port) => instance.setUdpEndpoint(address, port),
+setOnConnectionFailedCallback: (callback) => ...,
+```
+
+Discord does not ask the transport whether it feels connected. It sends its own pings on
+its own interval and decides on timeout. Retry policy is an explicit triple — base delay,
+max delay, max attempts — and recovery is **tiered**: `fastUdpReconnect` first, a full
+teardown only if that fails.
+
+We had been reading `RTCPeerConnection.connectionState` and treating `disconnected` as
+news. ICE enters `disconnected` after a couple of missed consent checks, which an ordinary
+Wi-Fi hiccup produces several times an hour, and it can sit there 15 seconds before
+admitting `failed`. That is the entire explanation for "Reconectando" appearing over a
+picture that never stopped, and for it never clearing afterwards.
+
+### A.6.2 Playout delay is a dial, and the buffer stretches rather than skips
+
+```js
+setMinimumOutputDelay: (delay) => instance.setMinimumOutputDelay(delay),
+```
+
+Backed by NetEq — `modules/audio_coding/neteq/{neteq_impl,delay_constraints,packet_buffer,
+decoder_database,comfort_noise,audio_multi_vector}.cc` all survive in the binary, with
+`WebRTC-Audio-NetEqDelayManagerConfig` and `WebRTC-ForcePlayoutDelay` alongside.
+
+Two principles, both of which we had backwards:
+
+1. **The target delay adapts.** It is not a constant picked by whoever wrote the file.
+2. **Running dry never leaves a hole.** NetEq time-stretches.
+
+Our AudioWorklet did the opposite: a fixed 60 ms cushion, and on underrun it re-primed —
+turning every hiccup into a flat 60 ms of silence, which is more audible than the glitch
+it was meant to prevent. That was the clicking.
+
+### A.6.3 Capture audio is a subsystem that is allowed to fail
+
+```js
+setOnSoundshare, setOnSoundshareEnded, setOnSoundshareFailed
+setDesktopSourceStatusCallback, setOnDesktopSourceEnded
+setOnVideoEncoderFallbackCallback, setOnVideoDecoderFallbackCallback,
+setVideoCodecErrorCallback
+```
+
+Every failure mode of capture and encoding has its own callback. Nothing fails silently
+and nothing fails fatally — audio can die without taking the video with it.
+
+Internals, from the native strings:
+
+```
+ActivateApplicationLoopbackForProcessTree      <- same WASAPI API we use
+../../discord_native_lib/src/media/soundshare/loopback_controller.cpp
+../../discord_native_lib/src/media/soundshare/controller.cpp
+soundshare_recv_connect / soundshare_recv_format / soundshare_recv_disconnect
+"Suspending soundshare capture: another source owns game audio"
+"Soundshare thread failed to write to sink"
+```
+
+Two layers: an injected hook that the game *sends* audio to (`discord_hook`), with
+`ActivateApplicationLoopbackForProcessTree` as the fallback. We only have the second,
+which is the modern path and the right one to have — this confirms the approach rather
+than contradicting it.
+
+### A.6.4 Do not decode what nobody is looking at
+
+```js
+setDisableLocalVideo: (userId, disabled) => instance.setDisableLocalVideo(userId, disabled),
+```
+
+Receiver-side, per user. In a mesh, every participant decodes every other participant's
+video whether or not it is on screen. Not yet applied here; the obvious next win.
+
+### A.6.5 Changes made as a direct result
+
+| Finding | What changed |
+|---|---|
+| NetEq adapts its target; never leaves a hole | Worklet target now grows on underrun (80→320 ms) and decays back slowly; a 4 ms fade replaces the silence cliff |
+| Liveness is measured, not inferred | Grace before announcing trouble widened to 6 s; ICE restart retries on a backoff; viewer re-asks for the stream if it never recovers |
+| Tiered recovery before teardown | `restartIce` first, full rejoin only after 20 s |
+| Every failure has a callback | `qualityLimitationReason` surfaced in telemetry — cpu vs bandwidth is now readable instead of guessed |
+
+### A.6.6 The honest gap
+
+Discord reaches NVENC because it does not use Chromium's encoder at all. Measured on this
+machine: `app.getGPUFeatureStatus()` reports `video_encode: enabled`, and
+`videoEncodeAcceleratorSupportedProfile` is **empty** — zero hardware encode profiles on a
+GeForce RTX 2060. Browser-level WebRTC in Electron encodes in software, and no command
+line flag tested (`ignore-gpu-blocklist`, `disable-gpu-driver-bug-workarounds`) changed
+that. Closing this gap means a native encoder module, which is Discord's entire
+`gpu_encoder_helper.exe` architecture. It is a real project, not a setting.
+
+Also measured, and the reason the codec order finally matters: asked for 1080p60, the AV1
+encoder available here produced **480x270 at 1 fps**. The order we had intended —
+AV1 first — would have been actively harmful had it ever been applied. It never was:
+`setCodecPreferences` was being handed `RTCRtpSender.getCapabilities`, which advertises
+H.264 High (`profile-level-id=640032`); the receiver does not accept that profile and the
+call threw on every invocation into a silent catch.

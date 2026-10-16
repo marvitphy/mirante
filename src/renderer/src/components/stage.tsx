@@ -56,10 +56,20 @@ export function Stage({
   const [showStats, setShowStats] = useState(false)
   const [, setClockTick] = useState(0)
 
-  // The screen, explicitly. Falling back to whatever stream arrived last is
-  // how turning on a camera mid-broadcast used to replace the broadcast.
-  const stream = peer ? peer.screen : localScreen
-  const live = peer ? peer.link === 'live' : localScreen !== null
+  // The focused person's screen, their camera if they have no screen, and
+  // your own preview if they have neither.
+  //
+  // Order matters and so does the fallback. Screen before camera is what
+  // stops a camera turning on mid-broadcast from taking the stage. The
+  // fallback to local is what stops the stage going blank while you are
+  // the one broadcasting: focus lands on a peer the moment they ANNOUNCE a
+  // stream, which is before any track of theirs has arrived, and until then
+  // `peer.screen` is null. The screen you were sharing simply vanished from
+  // your own window while everyone else watched it fine.
+  const remote = peer ? (peer.screen ?? peer.camera) : null
+  const stream = remote ?? localScreen
+  const showingLocal = remote === null && localScreen !== null
+  const live = remote !== null ? peer?.link === 'live' : localScreen !== null
 
   // `srcObject` is not a React prop; it has to be assigned imperatively.
   useEffect(() => {
@@ -121,10 +131,11 @@ export function Stage({
     )
   }
 
-  const stats = peer?.stats
-  const title = peer
-    ? (peer.state.screenLabel ?? `Tela de ${peer.info.name}`)
-    : 'Sua tela · prévia local'
+  const stats = showingLocal ? undefined : peer?.stats
+  const title =
+    peer && !showingLocal
+      ? (peer.state.screenLabel ?? `Tela de ${peer.info.name}`)
+      : 'Sua tela · prévia local'
 
   return (
     <div
@@ -193,7 +204,7 @@ export function Stage({
       )}
 
       <div className="tm-stage__bottom" data-visible={chromeVisible}>
-        {peer && (
+        {peer && !showingLocal && (
           <>
             <SignalMeter stats={peer.stats} live={live} variant="inline" />
             <div
@@ -237,7 +248,7 @@ export function Stage({
         </button>
       </div>
 
-      {!live && peer && (
+      {!live && peer && !showingLocal && (
         <div className="tm-stage__interrupted">
           <span className="tm-spinner" aria-hidden="true" />
           Reconectando
