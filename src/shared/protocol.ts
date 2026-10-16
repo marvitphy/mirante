@@ -20,6 +20,19 @@ export type RoomId = string
 
 export interface PeerInfo {
   id: PeerId
+  /**
+   * Who this is across reconnects — the same value the client sent in `hello`.
+   *
+   * The server already replaces a session carrying a clientId it has seen, so
+   * in principle no room ever holds two of the same person. In practice the
+   * correction travels as a `peerLeft` broadcast, and a broadcast is a thing
+   * that can be missed: one person saw the room clean while another saw the
+   * same user twice, from the same server state.
+   *
+   * Publishing it makes the invariant checkable by every client on its own,
+   * instead of being something each of them has to be successfully told.
+   */
+  clientId: string
   name: string
   /** Deterministic hue (0-359) derived from the id, so a peer looks the same to everyone. */
   hue: number

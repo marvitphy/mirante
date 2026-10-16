@@ -17,6 +17,10 @@ use windows::core::{
     implement, Error as WinError, Interface, Result as WinResult, GUID, HRESULT, PCWSTR,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, MAX_PATH, S_OK, WAIT_OBJECT_0};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+    TH32CS_SNAPPROCESS,
+};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::Win32::Media::Audio::{
     eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateActive,
@@ -96,6 +100,48 @@ pub fn pid_for_window(hwnd: isize) -> Option<u32> {
         None
     } else {
         Some(pid)
+    }
+}
+
+/// The process that spawned `pid`, when it is still discoverable.
+///
+/// Needed because every capture is opened with `IncludeTree`, and the mixer
+/// SUMS its captures. Open one on a parent and another on its child and the
+/// same audio is added to itself: +6 dB, and loud passages clip. Chrome makes
+/// that the normal case rather than the exception — its browser process and
+/// its audio service both hold audio sessions, and one is the ancestor of the
+/// other.
+///
+/// A snapshot is a point-in-time view and a pid can be reused, so a wrong
+/// answer here is possible but harmless: the caller only uses it to decide
+/// which of two captures to skip.
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    // SAFETY: the snapshot handle is closed on every path; Process32FirstW
+    // and Process32NextW only read from it and the entry struct is
+    // fully initialised with its required dwSize.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        let mut found = None;
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32ProcessID == pid {
+                    found = Some(entry.th32ParentProcessID);
+                    break;
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+        found.filter(|parent| *parent != 0 && *parent != pid)
     }
 }
 

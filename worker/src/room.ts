@@ -175,6 +175,7 @@ export class Room extends DurableObject<Env> {
       const id = crypto.randomUUID()
       const info: PeerInfo = {
         id,
+        clientId: msg.clientId,
         name: (msg.name || 'convidado').slice(0, 32),
         hue: hueFromId(id),
         joinedAt: Date.now()

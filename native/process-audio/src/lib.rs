@@ -147,6 +147,24 @@ pub fn executable_for_pid(pid: u32) -> Option<String> {
     }
 }
 
+/// The process that spawned `pid`, when it is still discoverable.
+///
+/// Every capture is opened with `IncludeTree` and the mixer sums them, so
+/// capturing both a parent and its child adds the same audio to itself.
+/// This is what lets the caller drop the redundant one.
+#[napi]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    #[cfg(windows)]
+    {
+        backend::parent_pid(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 /// A running capture. Dropping or calling [`ProcessAudioCapture::stop`] releases
 /// the device and joins the capture thread.
 #[napi]

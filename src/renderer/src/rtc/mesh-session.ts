@@ -278,6 +278,47 @@ export class MeshSession {
     return [...this.publishers.values(), ...this.viewers.values()]
   }
 
+  /**
+   * One person, one row — enforced here rather than hoped for.
+   *
+   * The server replaces a session whose clientId it has already seen and
+   * announces it with `peerLeft`. That announcement is a broadcast, and a
+   * broadcast can go missing: the symptom was one person seeing a clean room
+   * while someone else, in the same room at the same moment, saw the same
+   * user listed twice. No amount of care on the server fixes a message that
+   * did not arrive, so the rule is checked locally too.
+   *
+   * The newest session wins, because it is the one with a live socket.
+   */
+  private collapseDuplicates(): void {
+    const newest = new Map<string, PeerView>()
+    const doomed: string[] = []
+
+    for (const peer of this.peers.values()) {
+      const key = peer.info.clientId
+      // An older build sends no clientId; it cannot be de-duplicated and must
+      // not be collapsed against anyone else who also lacks one.
+      if (!key) continue
+
+      const held = newest.get(key)
+      if (!held) {
+        newest.set(key, peer)
+        continue
+      }
+      const stale = held.info.joinedAt <= peer.info.joinedAt ? held : peer
+      newest.set(key, stale === held ? peer : held)
+      doomed.push(stale.info.id)
+    }
+
+    for (const id of doomed) {
+      console.warn(`[mesh] descartando copia duplicada de ${id}`)
+      this.dropLinks(id)
+      this.mixer.detach(id)
+      this.peers.delete(id)
+      if (this.focused === id) this.focused = null
+    }
+  }
+
   private dropLinks(peerId: string): void {
     this.cancelRejoin(peerId)
     this.cancelJoinRetry(peerId)
@@ -297,6 +338,7 @@ export class MeshSession {
         for (const peer of message.peers) {
           this.peers.set(peer.id, this.blankPeer(peer, peer.state))
         }
+        this.collapseDuplicates()
         this.emit()
         // Subscribe to everyone already publishing.
         for (const peer of message.peers) {
@@ -309,6 +351,7 @@ export class MeshSession {
 
       case 'peerJoined': {
         this.peers.set(message.peer.id, this.blankPeer(message.peer, message.state))
+        this.collapseDuplicates()
         // Deliberately not fired for the `welcome` list: arriving to a room
         // of four people should not play four sounds at once.
         soundJoin()

@@ -34,6 +34,7 @@ interface NativeModule {
   listAudioApps: () => AudioApp[]
   pidForWindow: (hwnd: number) => number | null
   executableForPid: (pid: number) => string | null
+  parentPid: (pid: number) => number | null
   ProcessAudioCapture: new (
     pid: number,
     mode: 'IncludeTree' | 'ExcludeTree'
@@ -260,6 +261,9 @@ const MAX_BURST = FRAME_10MS * 10
 /** Roughly a second of backlog per source before the oldest audio is dropped. */
 const MAX_QUEUED = FRAME_10MS * 100
 
+/** Level above which the mix is compressed rather than clamped. */
+const LIMIT_KNEE = 0.85
+
 interface Source {
   capture: Capture
   /** Samples decoded but not yet mixed. */
@@ -319,17 +323,58 @@ function drain(source: Source, out: Float32Array, count: number): void {
   }
 }
 
+/**
+ * Drop any pid that already has an ancestor in the set.
+ *
+ * Captures are opened with `IncludeTree` and the mixer SUMS them, so a parent
+ * and its child contribute the same audio twice — +6 dB, which clips on
+ * anything loud and reads as crackle or distortion rather than as a volume
+ * problem. Chrome makes this the normal case: its browser process and its
+ * audio service both hold audio sessions, and the first is an ancestor of the
+ * second. Capturing both was guaranteed double-counting.
+ */
+function dropRedundantTrees(pids: number[]): number[] {
+  const mod = loadNative()
+  if (!mod || pids.length < 2) return pids
+
+  const set = new Set(pids)
+  const parentOf = (pid: number): number | null => {
+    try {
+      return mod.parentPid(pid) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  const kept = pids.filter((pid) => {
+    // Walk up until we leave the process tree. Bounded, because a cycle in
+    // the parent chain would otherwise hang the capture loop.
+    let cursor = parentOf(pid)
+    for (let hops = 0; cursor !== null && hops < 24; hops++) {
+      if (set.has(cursor)) return false
+      cursor = parentOf(cursor)
+    }
+    return true
+  })
+
+  const dropped = pids.length - kept.length
+  if (dropped > 0) console.log(`[process-audio] ${dropped} pid(s) ja cobertos por um ancestral`)
+  return kept
+}
+
 /** The pids we want captured right now, resolved fresh every time. */
 function desiredPids(): number[] {
   if (!target) return []
 
   const playing = listAudioApps()
 
-  if (target.kind === 'everything') return playing.map((a) => a.pid)
+  if (target.kind === 'everything') return dropRedundantTrees(playing.map((a) => a.pid))
 
   if (target.executable) {
     const wanted = target.executable.toLowerCase()
-    return playing.filter((a) => a.executable.toLowerCase() === wanted).map((a) => a.pid)
+    return dropRedundantTrees(
+      playing.filter((a) => a.executable.toLowerCase() === wanted).map((a) => a.pid)
+    )
   }
 
   // The application could not be named, so the window's own process tree is
@@ -449,9 +494,20 @@ export function startProcessAudio(
 
     const mixed = new Float32Array(count)
     for (const source of sources.values()) drain(source, mixed, count)
-    // Clip rather than wrap: summed streams can exceed unity.
+
+    // Soften the top instead of shearing it off.
+    //
+    // Summed sources can exceed unity, and a hard clamp turns every excursion
+    // past 1.0 into a flat edge — which is audible as crackle, not loudness.
+    // Below the knee nothing is touched at all; above it the curve compresses
+    // smoothly and never reaches 1.0, so there is no flat edge to hear.
     for (let i = 0; i < count; i++) {
-      mixed[i] = mixed[i] > 1 ? 1 : mixed[i] < -1 ? -1 : mixed[i]
+      const v = mixed[i]
+      const a = v < 0 ? -v : v
+      if (a <= LIMIT_KNEE) continue
+      const over = (a - LIMIT_KNEE) / (1 - LIMIT_KNEE)
+      const shaped = LIMIT_KNEE + (1 - LIMIT_KNEE) * (over / (1 + over))
+      mixed[i] = v < 0 ? -shaped : shaped
     }
     window.webContents.send('audio:pcm', mixed.buffer)
   }, MIX_INTERVAL_MS)

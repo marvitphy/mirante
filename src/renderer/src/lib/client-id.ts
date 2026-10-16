@@ -77,5 +77,22 @@ export function clientId(): string {
     }
   }, HEARTBEAT_MS)
 
+  // Let go on the way out, so a restart reclaims the same slot instead of
+  // taking the next one.
+  //
+  // Without this, updating was guaranteed to change your identity: the app
+  // relaunches two or three seconds after quitting, well inside the seven
+  // second staleness window, so the slot it had just vacated still looked
+  // occupied and the new window claimed `#1`. A different client id is a
+  // different person as far as the server is concerned — which is to say
+  // every single update produced a duplicate of whoever installed it.
+  window.addEventListener('pagehide', () => {
+    try {
+      localStorage.removeItem(SLOT_PREFIX + slot)
+    } catch {
+      // Then it goes stale on its own; that path still works.
+    }
+  })
+
   return cached
 }
