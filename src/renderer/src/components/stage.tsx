@@ -358,6 +358,7 @@ export function Stage({
                 onToggleMute={onToggleMute}
                 label={peer.info.name}
                 audible={peer.audible}
+                hideMute
               />
             </div>
           </>

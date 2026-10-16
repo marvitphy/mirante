@@ -21,6 +21,15 @@ interface VolumeSliderProps {
   compact?: boolean
   /** When false the peer is sending no audio; say so instead of pretending. */
   audible?: boolean
+  /**
+   * Drop the speaker button because the caller already has one.
+   *
+   * On the stage the speaker answers "do I hear this broadcast at all",
+   * which is the same question this one was asking. Two identical icons
+   * side by side is not more control, it is a guess about which one does
+   * what — and the extra one also squeezed the slider out of its row.
+   */
+  hideMute?: boolean
 }
 
 const MAX = 2
@@ -34,7 +43,8 @@ export function VolumeSlider({
   onToggleMute,
   label,
   compact = false,
-  audible = true
+  audible = true,
+  hideMute = false
 }: VolumeSliderProps): JSX.Element {
   const effective = muted ? 0 : volume
   const percent = (effective / MAX) * 100
@@ -74,15 +84,17 @@ export function VolumeSlider({
 
   return (
     <div className={`tm-volume${compact ? ' tm-volume--compact' : ''}`}>
-      <button
-        type="button"
-        className="tm-volume__mute"
-        onClick={onToggleMute}
-        aria-pressed={muted}
-        title={muted ? 'Reativar som' : 'Silenciar'}
-      >
-        {muted ? <IconVolumeOff size={16} /> : <IconVolume size={16} />}
-      </button>
+      {!hideMute && (
+        <button
+          type="button"
+          className="tm-volume__mute"
+          onClick={onToggleMute}
+          aria-pressed={muted}
+          title={muted ? 'Reativar som' : 'Silenciar'}
+        >
+          {muted ? <IconVolumeOff size={16} /> : <IconVolume size={16} />}
+        </button>
+      )}
 
       <div className="tm-volume__track" ref={trackRef} title="Role pra ajustar">
         <div

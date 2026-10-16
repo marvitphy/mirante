@@ -226,6 +226,7 @@ function Panel({
           label={peer.info.name}
           audible={peer.audible}
           compact
+          hideMute
         />
       </div>
     </div>

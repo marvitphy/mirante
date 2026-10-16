@@ -769,3 +769,16 @@
     transition: none;
   }
 }
+
+/* The volume row sizes for its worst case rather than its best.
+   It carries a speaker, a name of up to twelve characters, the track and a
+   percentage; at the old width the track was whatever happened to be left
+   over, which turned out to be almost nothing once a second button appeared.
+   A floor on the track means the row can never again present a slider too
+   short to aim at. */
+.tm-stage__volume {
+  width: 248px;
+}
+.tm-stage__volume .tm-volume__track {
+  min-width: 84px;
+}
