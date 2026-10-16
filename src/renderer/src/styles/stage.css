@@ -782,3 +782,106 @@
 .tm-stage__volume .tm-volume__track {
   min-width: 84px;
 }
+
+/* --- a broadcast you are not in ---------------------------------------- */
+/*
+ * Same frame as a joined panel, different contents: nothing is being
+ * received, so there is nothing to play. What there is, is the frame from
+ * before you left — or their colour, if you were never in.
+ *
+ * It sits in the grid beside the ones you joined because the stage is a
+ * picture of the ROOM. Showing only your own subscriptions meant that with
+ * two friends live and you in neither, one of them was simply absent from
+ * the screen.
+ */
+.tm-panel--offer {
+  display: block;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  background: #000;
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  transition:
+    border-color var(--t-pop) var(--ease-out),
+    transform var(--t-pop) var(--ease-out);
+}
+.tm-panel--offer:hover,
+.tm-panel--offer:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.tm-panel__frozen {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.45;
+  filter: saturate(0.45);
+}
+
+.tm-panel__blank {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: var(--text-h1);
+  font-weight: 700;
+}
+
+.tm-panel__offer {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3);
+  background: linear-gradient(to top, hsl(258 45% 1% / 0.92), transparent);
+}
+
+/* Lilac, never the red tally: red says "you are on air", this is an offer. */
+.tm-panel__lamp {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  animation: tm-tally 2s var(--ease-out) infinite;
+}
+
+.tm-panel__offer-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tm-panel__offer-go {
+  flex: 0 0 auto;
+  padding: 3px var(--s-3);
+  background: var(--accent);
+  color: var(--accent-ink, #140c1f);
+  font-size: var(--text-nano);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-panel--offer {
+    transition: none;
+  }
+  .tm-panel--offer:hover {
+    transform: none;
+  }
+  .tm-panel__lamp {
+    animation: none;
+  }
+}

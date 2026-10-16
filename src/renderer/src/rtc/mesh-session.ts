@@ -408,14 +408,25 @@ export class MeshSession {
           }
         }
 
+        // Say what WE are publishing, every time.
+        //
+        // The server builds a session with an empty publish state and learns
+        // the rest from `publishState` messages, which a client only sends
+        // when something changes. That is fine for a first connection and
+        // wrong for every reconnection: after a network blip — or after the
+        // signalling worker is redeployed, which evicts the room object and
+        // drops every socket at once — everyone came back announcing
+        // nothing. Four people connected, no cameras, no screens, nothing on
+        // the stage, and no way out but restarting. The state was never lost
+        // locally; it simply was never said again.
+        this.announce()
+
         // Walking in shows you everything already happening — a room you
         // just entered should not be a list of invitations to things you
         // cannot see. What it does not do is play any of it: sound is the
         // part you point at, one broadcast at a time.
         for (const peer of this.peers.values()) {
-          if (peer.state.screen || peer.state.camera) {
-            this.watch(peer.info.id, { listen: false })
-          }
+          if (peer.state.screen || peer.state.camera) this.watch(peer.info.id)
         }
         break
       }
@@ -954,12 +965,17 @@ export class MeshSession {
   /**
    * Start receiving someone's picture. Their voice was never gone.
    *
-   * `listen` is separate on purpose. Walking into a room should show you
-   * everything that is happening and play none of it: four broadcasts
-   * arriving at once is not a welcome, it is an ambush. Sound is the part
-   * you point at.
+   * Never starts the sound. Every broadcast opens silent, without
+   * exception — including the one that joins everybody automatically in a
+   * quiet room. Showing someone a picture they did not ask for costs them
+   * nothing; playing them audio they did not ask for interrupts whatever
+   * they were already listening to, and an app that does that once is an
+   * app people keep muted.
+   *
+   * Sound has exactly two switches, both of them yours: the speaker, and
+   * moving the volume.
    */
-  watch(peerId: string, { listen = true }: { listen?: boolean } = {}): void {
+  watch(peerId: string): void {
     const peer = this.peers.get(peerId)
     if (!peer || peer.watching) return
     // Joining the FIRST broadcast fills the stage with it, because there is
@@ -969,10 +985,7 @@ export class MeshSession {
     const alreadyWatching = [...this.peers.values()].some((p) => p.watching)
     peer.watching = true
     peer.frozen = null
-    if (listen) {
-      this.focused = alreadyWatching ? null : peerId
-      this.listenTo(peerId)
-    }
+    this.focused = alreadyWatching ? null : peerId
     // The tracks are already in their slots if the link is up; the publisher
     // simply stopped filling the video ones.
     peer.screen = peer.state.screen ? (peer.streams.get('screen') ?? null) : null
@@ -1259,14 +1272,13 @@ export class MeshSession {
   /**
    * Fill the stage with one broadcast, or go back to the grid.
    *
-   * Enlarging something is also a statement about wanting to hear it, so
-   * this carries the sound along. Going back to the grid leaves the sound
-   * where it was: you were listening to someone a moment ago and the layout
-   * changing is not a reason to stop.
+   * Layout only. Enlarging a picture is not a request to hear it — the two
+   * were tied together at first and it meant a click to see something
+   * better also started playing it, which is the same ambush in a smaller
+   * form. Whatever you were listening to keeps playing.
    */
   focus(peerId: string | null): void {
     this.focused = peerId
-    if (peerId !== null) this.listenTo(peerId)
     this.emit()
   }
 

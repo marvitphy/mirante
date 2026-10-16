@@ -139,6 +139,10 @@ function LocalPanel({
   )
 }
 
+/**
+ * One broadcast. Either you are in it, in which case it plays, or you are
+ * not, in which case it says so and offers to let you in.
+ */
 function Panel({
   peer,
   hearing,
@@ -155,8 +159,9 @@ function Panel({
   onToggleMute: () => void
 }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const stream = peer.screen ?? peer.camera
+  const stream = peer.watching ? (peer.screen ?? peer.camera) : null
   const live = peer.link === 'live'
+  const joined = peer.watching
 
   useEffect(() => {
     const video = videoRef.current
@@ -168,6 +173,39 @@ function Panel({
   }, [stream])
 
   const title = peer.state.screenLabel ?? `Tela de ${peer.info.name}`
+
+  // A broadcast you have not joined. Nothing is being received for it, so
+  // there is nothing to play — what there is, is the frame from before you
+  // left, or their colour if you were never in.
+  if (!joined) {
+    return (
+      <button
+        type="button"
+        className="tm-panel tm-panel--offer"
+        onClick={onExpand}
+        title={`Entrar na transmissão de ${peer.info.name}`}
+      >
+        {peer.frozen ? (
+          <img className="tm-panel__frozen" src={peer.frozen} alt="" />
+        ) : (
+          <span
+            className="tm-panel__blank"
+            style={{ background: `hsl(${peer.info.hue} 45% 14%)` }}
+          >
+            <span style={{ color: `hsl(${peer.info.hue} 70% 70%)` }}>
+              {peer.info.name.slice(0, 1).toUpperCase()}
+            </span>
+          </span>
+        )}
+
+        <span className="tm-panel__offer">
+          <span className="tm-panel__lamp" aria-hidden="true" />
+          <span className="tm-panel__offer-name">{peer.info.name}</span>
+          <span className="tm-panel__offer-go">Entrar</span>
+        </span>
+      </button>
+    )
+  }
 
   return (
     <div className="tm-panel">

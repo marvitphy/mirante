@@ -451,22 +451,31 @@ export function App(): JSX.Element {
    * trusting a field to have been set removes the whole class.
    */
   const stage = useMemo(() => {
+    /**
+     * Every broadcast in the room gets a panel, joined or not.
+     *
+     * The stage used to show only what you had joined, and offer the rest
+     * one at a time through a single card. With two friends live and you in
+     * neither, that meant one of them was simply absent from the screen —
+     * no picture, no mention, nothing to click. The room had two things
+     * happening and the app showed one.
+     *
+     * Showing all of them and marking which you are in is both simpler and
+     * truer: the stage becomes a picture of the room rather than a picture
+     * of your subscriptions.
+     */
     const live = snapshot.peers.filter((p) => p.state.screen || p.state.camera)
     const watched = live.filter((p) => p.watching && (p.screen !== null || p.camera !== null))
     const localStream = snapshot.local.screen
     // Your own preview is a panel like any other: while watching friends you
     // still want to see that what you are sending is what you meant to send.
-    const panels = watched.length + (localStream ? 1 : 0)
+    const panels = live.length + (localStream ? 1 : 0)
 
-    if (focusedPeer) return { kind: 'solo' as const, peer: focusedPeer, watched, localStream }
-    if (panels > 1) return { kind: 'grid' as const, peer: null, watched, localStream }
-    if (watched.length === 1) {
-      return { kind: 'solo' as const, peer: watched[0], watched, localStream }
-    }
-    // Nothing joined. If someone is broadcasting, offer it instead of
-    // pretending the room is empty.
-    const offer = live.find((p) => !p.watching) ?? null
-    return { kind: 'solo' as const, peer: localStream ? null : offer, watched, localStream }
+    if (focusedPeer) return { kind: 'solo' as const, peer: focusedPeer, live, watched, localStream }
+    if (panels > 1) return { kind: 'grid' as const, peer: null, live, watched, localStream }
+    // A single thing happening fills the stage — whether you joined it or
+    // not, since the one that is not joined is the invitation.
+    return { kind: 'solo' as const, peer: localStream ? null : (live[0] ?? null), live, watched, localStream }
   }, [focusedPeer, snapshot.local.screen, snapshot.peers])
 
   const watched = stage.watched
@@ -659,7 +668,7 @@ export function App(): JSX.Element {
       <main className="tm-main" {...chrome.bind}>
         {gridded ? (
           <StageGrid
-            peers={watched}
+            peers={stage.live}
             localStream={stage.localStream}
             localWatchers={snapshot.local.watchers}
             listening={snapshot.listening}
