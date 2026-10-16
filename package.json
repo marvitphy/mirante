@@ -27,6 +27,7 @@
   "devDependencies": {
     "@fontsource-variable/archivo": "^5.1.0",
     "@fontsource/ibm-plex-mono": "^5.1.1",
+    "@mediapipe/tasks-vision": "^1.1.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",

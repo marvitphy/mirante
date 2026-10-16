@@ -75,6 +75,7 @@ Cinco verbos:
 | `reconnectOffer` como verbo de primeira classe | `peer-link.ts#restartIce` |
 | Telemetria via `getStats()` como ornamento | `signal-meter.tsx` — não é painel escondido, é a barra embaixo de cada pessoa |
 | Abstração de topologia | `mesh-session.ts` — nada acima dela conhece `RTCPeerConnection`. Trocar por SFU mexe só nesse arquivo. |
+| Fundo da câmera transparente pra transmissão | `camera-background.ts` — a sessão recebe um `MediaStream` comum. Ver seção abaixo. |
 
 ### O que fazemos melhor
 
@@ -90,6 +91,37 @@ para 5 pessoas precisa de 40 Mb/s de subida, que nenhuma internet doméstica tem
 O servidor limita a sala a 8 pessoas (`MAX_PEERS_PER_ROOM`); na prática conte com
 **4 espectadores** numa transmissão pesada. Acima disso o caminho é SFU, e a
 abstração em `mesh-session.ts` existe para esse dia.
+
+---
+
+## Fundo da câmera
+
+Uma imagem do seu PC atrás de você, no lugar do cômodo. Escolhida no seletor
+de câmera, com prévia ao vivo — **Configurações → Fundo da câmera → Ajustar**.
+
+- **Desligado é desligado.** Com "Nenhum" (o padrão) a webcam passa direto e o
+  MediaPipe nem carrega.
+- **Nada vem da rede.** O modelo (`assets/models/selfie_segmenter_landscape.tflite`)
+  e o WASM do `@mediapipe/tasks-vision` vão dentro do app. São lidos por XHR
+  porque `fetch` recusa `file://` dentro do `app.asar`.
+- **A webcam nunca vai pra sessão.** `setCamera`/`swapDevice` param o que
+  substituem; o `CameraFeed` guarda a webcam e publica um clone ou o canvas.
+  Por isso ligar, desligar ou trocar o fundo ao vivo não reabre a câmera.
+- **Nada sai antes do fundo estar pronto.** Publicar a câmera crua e trocar um
+  segundo depois mostraria o cômodo que o fundo existe pra esconder.
+- **Espelho só em você.** Na sua prévia a pessoa é invertida e a imagem não;
+  o que os outros recebem nunca é espelhado.
+- **O loop anda pelos quadros da câmera** (`MediaStreamTrackProcessor`), não
+  por `requestAnimationFrame`, que para com a janela atrás do jogo.
+- A imagem é reduzida pra no máximo 1280×720, JPEG 0.85, e guardada em
+  `localStorage` na chave `mirante.customBackground`.
+
+> **Limite honesto:** com a janela **minimizada** o Chromium rebaixa a
+> prioridade do renderer e o fundo cai abaixo de 30 fps (medido entre 2 e 24).
+> Coberta por outra janela — o jogo em tela cheia — fica em 23–29 fps.
+>
+> O MediaPipe tenta mandar telemetria pra `odml.pa.googleapis.com` e não tem
+> opção pra desligar. O `connect-src` da CSP recusa; não libere `https:` ali.
 
 ---
 

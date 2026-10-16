@@ -1002,9 +1002,119 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  /* Mirrored: you are looking at yourself, and a mirror is what people
-     expect of their own image. */
+}
+/* Mirrored: you are looking at yourself, and a mirror is what people expect
+   of their own image. Not applied with a background on — the feed has already
+   flipped you and left the picture the right way round. */
+.tm-campick__preview video.is-mirrored {
   transform: scaleX(-1);
+}
+
+.tm-campick__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+/* --- background --------------------------------------------------------- */
+/* Lives under the preview because the preview is how you judge it. */
+
+.tm-campick__bg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.tm-campick__bghead {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 28px;
+}
+.tm-campick__busy {
+  color: var(--text-muted);
+}
+.tm-campick__swap {
+  height: 28px;
+  margin-left: auto;
+  padding: 0 var(--s-3);
+}
+
+.tm-campick__bgopts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 148px));
+  gap: var(--s-2);
+}
+
+.tm-bgopt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--rule-faint);
+  background: var(--surface-1);
+  text-align: left;
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.tm-bgopt:hover {
+  border-color: var(--rule);
+}
+.tm-bgopt.is-on {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+.tm-bgopt.is-on .tm-aopt__dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.tm-bgopt__swatch {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--surface-stage);
+  border-bottom: 1px solid var(--rule-faint);
+  color: var(--text-tertiary);
+}
+/* "Nothing behind you": the stage, crossed by a single hairline. */
+.tm-bgopt__swatch--none {
+  background:
+    linear-gradient(
+      to top right,
+      transparent calc(50% - 0.5px),
+      var(--rule) calc(50% - 0.5px),
+      var(--rule) calc(50% + 0.5px),
+      transparent calc(50% + 0.5px)
+    ),
+    var(--surface-stage);
+}
+.tm-bgopt:hover .tm-bgopt__swatch--add {
+  color: var(--text-primary);
+}
+
+.tm-bgopt__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 30px;
+  padding: 0 var(--s-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-micro);
+  color: var(--text-secondary);
+}
+.tm-bgopt.is-on .tm-bgopt__foot {
+  color: var(--text-primary);
+}
+
+.tm-campick__notice {
+  font-size: var(--text-micro);
+  color: var(--signal-fair);
 }
 
 .tm-campick__error,

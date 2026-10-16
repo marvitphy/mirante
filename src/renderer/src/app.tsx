@@ -10,9 +10,17 @@ import { SettingsModal } from './components/settings-modal'
 import { SourcePicker } from './components/source-picker'
 import { Stage, type ViewMode } from './components/stage'
 import { TitleBar } from './components/title-bar'
-import { getSettings, listDevices, useSettings } from './lib/settings'
+import {
+  activeBackground,
+  getCustomBackground,
+  getSettings,
+  listDevices,
+  useCustomBackground,
+  useSettings
+} from './lib/settings'
 import { useAutoHide } from './lib/use-auto-hide'
 import { useHotkeys } from './lib/use-hotkeys'
+import { CameraFeed, type SelfView } from './rtc/camera-background'
 import { createPcmTrack, type PcmTrackHandle } from './rtc/pcm-track'
 import { captureConstraints, type ScreenProfileName } from './rtc/sdp'
 import { session, useSession } from './rtc/use-session'
@@ -24,6 +32,17 @@ const DEFAULT_SERVER = __SIGNAL_URL__
 /** Filled from the updater state, which already carries the installed build. */
 let appVersion = '—'
 const STORE_KEY = 'tvmirante.join'
+const BACKGROUND_FAILED = 'Não consegui aplicar o fundo. A câmera segue sem ele.'
+
+/** One set of camera constraints, so opening and switching never disagree. */
+function cameraConstraints(deviceId: string): MediaTrackConstraints {
+  return {
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: 30 }
+  }
+}
 
 interface JoinDetails {
   name: string
@@ -56,8 +75,10 @@ export function App(): JSX.Element {
   const [mode, setMode] = useState<ViewMode>('normal')
   const [shareError, setShareError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [cameraPicker, setCameraPicker] = useState(false)
+  /** `first`: turning the camera on asked which one. `adjust`: opened from settings. */
+  const [cameraPicker, setCameraPicker] = useState<'first' | 'adjust' | null>(null)
   const settings = useSettings()
+  const background = activeBackground(settings, useCustomBackground())
   const defaults = useMemo(loadDefaults, [])
 
   // Player chrome lives here rather than inside Stage, so the people rail
@@ -66,6 +87,17 @@ export function App(): JSX.Element {
 
   // Per-process audio track, alive only while sharing with app audio.
   const pcmRef = useRef<PcmTrackHandle | null>(null)
+
+  // The open webcam, with or without a background. The session only ever
+  // holds the feed's output, never the webcam itself — see camera-background.
+  const feedRef = useRef<CameraFeed | null>(null)
+  // Bumped whenever the camera is switched off. Opening with a background
+  // takes a moment while MediaPipe loads; leaving the room in that moment
+  // must not let the camera come on afterwards.
+  const cameraEpochRef = useRef(0)
+  // Your own tile: with a mirrored background the picture shown to you is not
+  // the one being sent, so it is tracked apart from the published stream.
+  const [selfView, setSelfView] = useState<SelfView | null>(null)
 
   // --- capture picker ------------------------------------------------------
 
@@ -185,28 +217,97 @@ export function App(): JSX.Element {
 
   // --- publishing ----------------------------------------------------------
 
-  /** Open the camera, using `deviceId` or whatever is already configured. */
-  const openCamera = useCallback(async (deviceId?: string): Promise<void> => {
-    const id = deviceId ?? getSettings().cameraId
+  /**
+   * Bring a feed's background in line with the settings, and republish if
+   * that changed what it sends.
+   *
+   * Failing to start the background never takes the camera down with it: the
+   * feed keeps sending the plain picture, and you are told.
+   */
+  const applyBackground = useCallback(async (feed: CameraFeed): Promise<void> => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          ...(id ? { deviceId: { exact: id } } : {}),
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
+      const wanted = activeBackground(getSettings(), getCustomBackground())
+      const changed = await feed.setBackground(wanted)
+      // The session stops whatever it replaces, so handing it the stream it
+      // already holds would switch the camera off. Only swap a real change,
+      // and only for the feed that is still the live one.
+      if (changed && feedRef.current === feed) {
+        if (session.getSnapshot().local.camera !== feed.output) {
+          await session.swapDevice('camera', feed.output)
         }
-      })
-      await session.setCamera(stream)
+        feed.releaseRetired()
+      }
     } catch (error) {
-      console.warn('[media] camera denied:', error)
-      setShareError('Nao consegui abrir a camera.')
+      console.warn('[background] could not apply:', error)
+      setShareError(BACKGROUND_FAILED)
+    }
+    if (feedRef.current === feed) setSelfView(feed.selfView)
+  }, [])
+
+  /**
+   * Open a webcam, already wearing its background.
+   *
+   * With a background on, nothing is published until it is ready. Sending the
+   * plain picture first and swapping a second later would show everyone the
+   * very room the background exists to hide.
+   */
+  const openFeed = useCallback(async (deviceId: string): Promise<CameraFeed> => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: cameraConstraints(deviceId)
+    })
+    const feed = new CameraFeed(stream, getSettings().mirrorSelf)
+    try {
+      await feed.setBackground(activeBackground(getSettings(), getCustomBackground()))
+    } catch (error) {
+      console.warn('[background] could not start:', error)
+      setShareError(BACKGROUND_FAILED)
+    }
+    return feed
+  }, [])
+
+  /** Open the camera, using `deviceId` or whatever is already configured. */
+  const openCamera = useCallback(
+    async (deviceId?: string): Promise<void> => {
+      const id = deviceId ?? getSettings().cameraId
+      const epoch = cameraEpochRef.current
+      try {
+        const feed = await openFeed(id)
+        if (cameraEpochRef.current !== epoch) {
+          feed.close()
+          return
+        }
+        const previous = feedRef.current
+        feedRef.current = feed
+        await session.setCamera(feed.output)
+        previous?.close()
+        setSelfView(feed.selfView)
+        // The background may have been changed while the camera was opening.
+        await applyBackground(feed)
+      } catch (error) {
+        console.warn('[media] camera denied:', error)
+        setShareError('Nao consegui abrir a camera.')
+      }
+    },
+    [applyBackground, openFeed]
+  )
+
+  const closeCamera = useCallback(async (): Promise<void> => {
+    const feed = feedRef.current
+    feedRef.current = null
+    cameraEpochRef.current++
+    setSelfView(null)
+    try {
+      await session.setCamera(null)
+    } finally {
+      // The webcam is the feed's, not the session's: without this the camera
+      // light would stay on after the camera was switched off.
+      feed?.close()
     }
   }, [])
 
   const toggleCamera = useCallback(async () => {
     if (snapshot.local.camera) {
-      await session.setCamera(null)
+      await closeCamera()
       return
     }
 
@@ -216,13 +317,13 @@ export function App(): JSX.Element {
     if (!getSettings().cameraId) {
       const { cameras } = await listDevices()
       if (cameras.length > 1) {
-        setCameraPicker(true)
+        setCameraPicker('first')
         return
       }
     }
 
     await openCamera()
-  }, [openCamera, snapshot.local.camera])
+  }, [closeCamera, openCamera, snapshot.local.camera])
 
   const toggleMic = useCallback(async () => {
     if (snapshot.local.mic) {
@@ -271,20 +372,22 @@ export function App(): JSX.Element {
   }, [settings.speakerId])
 
   useEffect(() => {
-    if (!snapshot.local.camera) return
-    const active = snapshot.local.camera.getVideoTracks()[0]
-    if (!active || active.getSettings().deviceId === settings.cameraId) return
+    // The published track may be a background canvas, which has no device;
+    // the feed knows which camera is really behind it.
+    const feed = feedRef.current
+    if (!snapshot.local.camera || !feed || feed.deviceId === settings.cameraId) return
     void (async () => {
       try {
-        const next = await navigator.mediaDevices.getUserMedia({
-          video: {
-            ...(settings.cameraId ? { deviceId: { exact: settings.cameraId } } : {}),
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30 }
-          }
-        })
-        await session.swapDevice('camera', next)
+        const next = await openFeed(settings.cameraId)
+        // Switched off, or switched again, while this one was opening.
+        if (feedRef.current !== feed) {
+          next.close()
+          return
+        }
+        feedRef.current = next
+        await session.swapDevice('camera', next.output)
+        feed.close()
+        setSelfView(next.selfView)
       } catch (error) {
         console.warn('[settings] could not switch camera:', error)
       }
@@ -292,6 +395,19 @@ export function App(): JSX.Element {
     // Only the chosen device should retrigger this, not every snapshot tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.cameraId])
+
+  // Background on, off or changed: applied to the open camera in place. The
+  // webcam stays open throughout, so the light never blinks.
+  useEffect(() => {
+    if (feedRef.current) void applyBackground(feedRef.current)
+  }, [applyBackground, background])
+
+  useEffect(() => {
+    const feed = feedRef.current
+    if (!feed) return
+    feed.setMirror(settings.mirrorSelf)
+    setSelfView(feed.selfView)
+  }, [settings.mirrorSelf])
 
   useEffect(() => {
     if (!snapshot.local.mic) return
@@ -378,7 +494,7 @@ export function App(): JSX.Element {
     // room — then the next join added a second copy of you.
     try {
       await stopScreen()
-      await session.setCamera(null)
+      await closeCamera()
       await session.setMic(null)
     } catch (error) {
       console.warn('[leave] media teardown failed:', error)
@@ -387,7 +503,7 @@ export function App(): JSX.Element {
       setJoined(null)
       setMode('normal')
     }
-  }, [stopScreen])
+  }, [closeCamera, stopScreen])
 
   if (!joined) {
     return (
@@ -407,11 +523,11 @@ export function App(): JSX.Element {
       peers={snapshot.peers}
       selfName={snapshot.self?.name ?? joined.name}
       selfHue={snapshot.self?.hue ?? 263}
-      localCamera={snapshot.local.camera}
+      localCamera={snapshot.local.camera ? (selfView?.stream ?? snapshot.local.camera) : null}
       micOn={snapshot.local.mic !== null}
       focused={snapshot.focused}
       visible={chrome.visible}
-      mirrorSelf={settings.mirrorSelf}
+      mirrorSelf={selfView?.flip ?? settings.mirrorSelf}
       position={settings.railPosition}
       mixer={session.audioMixer}
       onFocus={(peerId) => session.focus(peerId)}
@@ -499,10 +615,12 @@ export function App(): JSX.Element {
       {cameraPicker && (
         <CameraPicker
           onConfirm={(deviceId) => {
-            setCameraPicker(false)
-            void openCamera(deviceId)
+            setCameraPicker(null)
+            // Opened from settings it only adjusts: a live camera has already
+            // followed the choice through the settings effects above.
+            if (cameraPicker === 'first') void openCamera(deviceId)
           }}
-          onCancel={() => setCameraPicker(false)}
+          onCancel={() => setCameraPicker(null)}
         />
       )}
 
@@ -510,6 +628,10 @@ export function App(): JSX.Element {
         <SettingsModal
           version={snapshot.self ? appVersion : appVersion}
           onClose={() => setSettingsOpen(false)}
+          onAdjustCamera={() => {
+            setSettingsOpen(false)
+            setCameraPicker('adjust')
+          }}
         />
       )}
 

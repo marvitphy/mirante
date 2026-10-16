@@ -51,6 +51,14 @@ export const IconCameraOff = (p: IconProps): JSX.Element => (
   </Icon>
 )
 
+export const IconImage = (p: IconProps): JSX.Element => (
+  <Icon {...p}>
+    <rect x="3" y="4.5" width="18" height="15" rx="2" />
+    <circle cx="8.5" cy="9.5" r="1.75" />
+    <path d="M21 15.5l-5-5-9.5 9" />
+  </Icon>
+)
+
 export const IconMic = (p: IconProps): JSX.Element => (
   <Icon {...p}>
     <rect x="9" y="2.5" width="6" height="11" rx="3" />

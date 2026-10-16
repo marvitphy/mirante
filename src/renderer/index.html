@@ -12,10 +12,19 @@
       "Refused to load the script 'blob:file:///...'" and the whole share
       failed — but only once per-app audio existed, which is why it survived
       every earlier test.
+
+      `'wasm-unsafe-eval'` lets the camera background compile MediaPipe's
+      WebAssembly, which ships inside the app. It permits compiling WASM and
+      nothing else — `eval` and `new Function` stay blocked.
+
+      MediaPipe also POSTs usage logs to odml.pa.googleapis.com, with no
+      option to turn that off. connect-src not allowing https: is what stops
+      it: the request is refused, MediaPipe gives up after the first refusal,
+      and "Refused to connect" appears once per background started. Leave it.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' ws: wss: blob:; worker-src 'self' blob:; child-src 'self' blob:"
+      content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' ws: wss: blob:; worker-src 'self' blob:; child-src 'self' blob:"
     />
     <title>Mirante</title>
   </head>
