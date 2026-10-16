@@ -56,7 +56,16 @@ const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
  */
 const BUDGET_START = 3_000_000
 const BUDGET_MIN = 1_000_000
+/** Ceiling for ONE viewer's stream. */
 const BUDGET_MAX = 20_000_000
+
+/**
+ * Ceiling for everything leaving this machine at once.
+ *
+ * The only genuinely shared limit. Per-viewer budgets are earned
+ * independently and only get scaled down when their sum would exceed this.
+ */
+const UPLINK_TOTAL_MAX = 24_000_000
 /**
  * Ceiling while any viewer is reached through a TURN relay.
  *
@@ -163,9 +172,10 @@ export class MeshSession {
   private readonly rejoinTimers = new Map<string, number>()
   /** Pending re-ask for a `join` that was never answered. */
   private readonly joinRetries = new Map<string, number>()
-  /** Total uplink the governor is currently willing to use. */
-  private uploadBudget = BUDGET_START
-  private healthyStreak = 0
+  /** What each viewer has earned, in bits per second, keyed by peer id. */
+  private readonly budgets = new Map<string, number>()
+  /** Consecutive healthy samples per viewer, before asking for more. */
+  private readonly streaks = new Map<string, number>()
   private governorTimer: number | null = null
   private readonly peers = new Map<string, PeerView>()
   private readonly mixer = new AudioMixer()
@@ -253,8 +263,8 @@ export class MeshSession {
       window.clearInterval(this.governorTimer)
       this.governorTimer = null
     }
-    this.uploadBudget = BUDGET_START
-    this.healthyStreak = 0
+    this.budgets.clear()
+    this.streaks.clear()
     for (const link of this.allLinks()) link.close()
     this.publishers.clear()
     this.viewers.clear()
@@ -710,70 +720,96 @@ export class MeshSession {
    *
    * Reads the publisher links, because those are the ones spending our upload.
    */
+  /**
+   * Reconsider each viewer's bitrate from that viewer's own measurements.
+   *
+   * Per link, deliberately. The first version took the WORST round-trip time
+   * across every viewer and handed one shared budget to all of them, which
+   * means one friend on bad Wi-Fi quietly capped everybody else — and a room
+   * where everyone has a good connection is then only as good as its unluckiest
+   * member. That is not a network limitation, it is an averaging mistake.
+   *
+   * Two separate limits are at work and they should not be confused:
+   *
+   *   - What THIS viewer's path can carry, measured from their own round-trip
+   *     time and loss. Theirs to earn and theirs to lose.
+   *   - What OUR uplink can carry in total, which really is shared — a mesh
+   *     sends one full copy per viewer. When the sum of what everyone earned
+   *     exceeds it, every share is scaled down in proportion.
+   *
+   * So a weak viewer now drops to their own floor and the bandwidth they are
+   * not using goes back to the pool for everyone else.
+   */
   private governUpload(): void {
     const links = [...this.publishers.values()]
     if (links.length === 0) {
-      // Nothing is being sent. Come back at the starting budget rather than
-      // at whatever a bad moment last left behind.
-      this.uploadBudget = BUDGET_START
-      this.healthyStreak = 0
+      this.budgets.clear()
       return
     }
 
-    let worstRtt = 0
-    let worstLoss = 0
-    let cpuBound = false
-    let relayed = false
+    // A machine that cannot encode fast enough will not encode faster because
+    // it was asked for more bits. Hold every share where it is.
+    const cpuBound = links.some((link) => link.stats.limitation === 'cpu')
+
     for (const link of links) {
       const stats = link.stats
-      if (stats.rttMs > worstRtt) worstRtt = stats.rttMs
-      if (stats.lossRatio > worstLoss) worstLoss = stats.lossRatio
-      if (stats.limitation === 'cpu') cpuBound = true
-      if (stats.relayed) relayed = true
-    }
+      const id = link.peerId
+      const ceiling = stats.relayed ? BUDGET_MAX_RELAYED : BUDGET_MAX
+      let budget = Math.min(this.budgets.get(id) ?? BUDGET_START, ceiling)
 
-    const ceiling = relayed ? BUDGET_MAX_RELAYED : BUDGET_MAX
-    if (this.uploadBudget > ceiling) {
-      this.uploadBudget = ceiling
-      this.spreadBudget()
-    }
+      // RTT arrives in RTCP and takes a few seconds. Silence is not good news.
+      if (stats.rttMs > 0 && !cpuBound) {
+        const strained = stats.rttMs > RTT_STRAINED_MS || stats.lossRatio > LOSS_STRAINED
+        const healthy = stats.rttMs < RTT_HEALTHY_MS && stats.lossRatio < LOSS_HEALTHY
 
-    // The encoder, not the link, is the wall. Raising the budget would only
-    // ask a machine that is already behind to do more, so hold where we are.
-    if (cpuBound) {
-      this.healthyStreak = 0
-      return
-    }
-
-    // No measurement yet — RTT comes from RTCP and takes a few seconds to
-    // show up. Hold, rather than reading silence as good news.
-    if (worstRtt === 0) return
-
-    const strained = worstRtt > RTT_STRAINED_MS || worstLoss > LOSS_STRAINED
-    const healthy = worstRtt < RTT_HEALTHY_MS && worstLoss < LOSS_HEALTHY
-
-    if (strained) {
-      this.healthyStreak = 0
-      this.uploadBudget = Math.max(BUDGET_MIN, Math.round(this.uploadBudget * 0.6))
-    } else if (healthy) {
-      this.healthyStreak++
-      if (this.healthyStreak >= GOVERNOR_PATIENCE) {
-        this.healthyStreak = 0
-        this.uploadBudget = Math.min(ceiling, Math.round(this.uploadBudget * 1.25))
+        if (strained) {
+          this.streaks.set(id, 0)
+          budget = Math.max(BUDGET_MIN, Math.round(budget * 0.6))
+        } else if (healthy) {
+          const streak = (this.streaks.get(id) ?? 0) + 1
+          if (streak >= GOVERNOR_PATIENCE) {
+            this.streaks.set(id, 0)
+            budget = Math.min(ceiling, Math.round(budget * 1.25))
+          } else {
+            this.streaks.set(id, streak)
+          }
+        } else {
+          this.streaks.set(id, 0)
+        }
       }
-    } else {
-      this.healthyStreak = 0
+
+      this.budgets.set(id, budget)
+    }
+
+    // Forget anyone who left, so their budget does not come back with them.
+    for (const id of [...this.budgets.keys()]) {
+      if (!this.publishers.has(id)) {
+        this.budgets.delete(id)
+        this.streaks.delete(id)
+      }
     }
 
     this.spreadBudget()
   }
 
-  /** Hand each publisher link its current slice of the budget. */
+  /**
+   * Apply each viewer's budget, scaled to fit the uplink we actually have.
+   *
+   * Only the total is shared. If everyone's earned bitrate fits under it,
+   * everyone gets what they earned — which is the whole point: a room of good
+   * connections should look like a room of good connections.
+   */
   private spreadBudget(): void {
     const links = [...this.publishers.values()]
     if (links.length === 0) return
-    const share = this.uploadBudget / links.length
-    for (const link of links) void link.setUploadBudget(share)
+
+    const wanted = links.map((link) => this.budgets.get(link.peerId) ?? BUDGET_START)
+    const total = wanted.reduce((sum, value) => sum + value, 0)
+    const scale = total > UPLINK_TOTAL_MAX ? UPLINK_TOTAL_MAX / total : 1
+
+    links.forEach((link, index) => {
+      void link.setUploadBudget(Math.max(BUDGET_MIN, Math.round(wanted[index] * scale)))
+    })
   }
 
   private attachAudio(peer: PeerView): void {
