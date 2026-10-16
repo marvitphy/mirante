@@ -472,13 +472,40 @@ export function App(): JSX.Element {
   const watched = stage.watched
   const gridded = stage.kind === 'grid'
 
+  /**
+   * Who the stage controls act on.
+   *
+   * NOT `focused`. The stage shows whatever exists — a single watched
+   * broadcast appears without anyone having focused it — but every handler
+   * was still reading `focused`, so in exactly that case the picture was
+   * right and every control was dead: volume, leave, mute, all no-ops with
+   * nothing to say why. Leaving one of two broadcasts landed there every
+   * time, and the only way out was to join someone again and have the grid
+   * rebuild. One source of truth for both halves fixes the class.
+   */
+  const onStage = stage.peer
+
+  /**
+   * Turn someone up, and start hearing them if you were not.
+   *
+   * Reaching for the volume of a broadcast whose sound is gated off is an
+   * unambiguous statement of intent, and answering it with silence makes
+   * the control look broken — which is exactly how it looked.
+   */
+  const setStageVolume = useCallback(
+    (peerId: string, volume: number) => {
+      session.setPeerAudio(peerId, { volume, muted: false })
+      if (session.getSnapshot().listening !== peerId) session.listenTo(peerId)
+    },
+    []
+  )
+
   const nudgeVolume = useCallback(
     (delta: number) => {
-      if (!focusedPeer) return
-      const next = Math.min(2, Math.max(0, focusedPeer.audio.volume + delta))
-      session.setPeerAudio(focusedPeer.info.id, { volume: next, muted: false })
+      if (!onStage) return
+      setStageVolume(onStage.info.id, Math.min(2, Math.max(0, onStage.audio.volume + delta)))
     },
-    [focusedPeer]
+    [onStage, setStageVolume]
   )
 
   const cycleFocus = useCallback(
@@ -512,8 +539,8 @@ export function App(): JSX.Element {
           if (focusedPeer && watched.length > 1) session.focus(null)
         },
         m: () => {
-          if (focusedPeer) {
-            session.setPeerAudio(focusedPeer.info.id, { muted: !focusedPeer.audio.muted })
+          if (onStage) {
+            session.setPeerAudio(onStage.info.id, { muted: !onStage.audio.muted })
           }
         },
         arrowup: () => nudgeVolume(0.05),
@@ -521,7 +548,7 @@ export function App(): JSX.Element {
         arrowright: () => cycleFocus(1),
         arrowleft: () => cycleFocus(-1)
       }),
-      [cycleFocus, focusedPeer, mode, nudgeVolume, watched.length]
+      [cycleFocus, focusedPeer, mode, nudgeVolume, onStage, watched.length]
     ),
     joined !== null
   )
@@ -571,6 +598,7 @@ export function App(): JSX.Element {
       selfName={snapshot.self?.name ?? joined.name}
       selfHue={snapshot.self?.hue ?? 263}
       localCamera={snapshot.local.camera ? (selfView?.stream ?? snapshot.local.camera) : null}
+      selfSharing={snapshot.local.screen !== null}
       micOn={snapshot.local.mic !== null}
       focused={snapshot.focused}
       visible={chrome.visible}
@@ -637,9 +665,7 @@ export function App(): JSX.Element {
             listening={snapshot.listening}
             onListen={(peerId) => session.listenTo(peerId)}
             onExpand={(peerId) => session.focus(peerId)}
-            onVolume={(peerId, volume) =>
-              session.setPeerAudio(peerId, { volume, muted: false })
-            }
+            onVolume={(peerId, volume) => setStageVolume(peerId, volume)}
             onToggleMute={(peerId) => {
               const peer = snapshot.peers.find((p) => p.info.id === peerId)
               if (peer) session.setPeerAudio(peerId, { muted: !peer.audio.muted })
@@ -657,20 +683,24 @@ export function App(): JSX.Element {
           onModeChange={setMode}
           onHold={chrome.hold}
           onWatch={() => {
-            if (focusedPeer) session.watch(focusedPeer.info.id)
+            if (onStage) session.watch(onStage.info.id)
           }}
           onLeave={(poster) => {
-            if (focusedPeer) session.unwatch(focusedPeer.info.id, poster)
+            if (onStage) session.unwatch(onStage.info.id, poster)
           }}
           onVolume={(volume) => {
-            if (focusedPeer) {
-              session.setPeerAudio(focusedPeer.info.id, { volume, muted: false })
-            }
+            if (onStage) setStageVolume(onStage.info.id, volume)
           }}
           onToggleMute={() => {
-            if (focusedPeer) {
-              session.setPeerAudio(focusedPeer.info.id, { muted: !focusedPeer.audio.muted })
+            if (onStage) {
+              session.setPeerAudio(onStage.info.id, { muted: !onStage.audio.muted })
             }
+          }}
+          listening={onStage !== null && snapshot.listening === onStage.info.id}
+          onListen={() => {
+            if (!onStage) return
+            const on = snapshot.listening === onStage.info.id
+            session.listenTo(on ? null : onStage.info.id)
           }}
         />
         )}

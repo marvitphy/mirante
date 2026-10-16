@@ -30,6 +30,8 @@ interface MiranteRailProps {
   selfName: string
   selfHue: number
   localCamera: MediaStream | null
+  /** Whether you are sharing a screen, which outranks a camera in the list. */
+  selfSharing: boolean
   micOn: boolean
   focused: string | null
   /** Fades in lockstep with the stage chrome. */
@@ -51,6 +53,7 @@ export function MiranteRail({
   selfName,
   selfHue,
   localCamera,
+  selfSharing,
   micOn,
   focused,
   visible,
@@ -62,6 +65,79 @@ export function MiranteRail({
   onToggleMute,
   onToggleMic
 }: MiranteRailProps): JSX.Element {
+  /**
+   * Order by what someone is doing, not by when they arrived.
+   *
+   * A list sorted by join time puts whoever happened to connect first at the
+   * top and leaves the person who just turned their camera on buried at the
+   * bottom. The column exists to show who is here and what they are up to,
+   * so the people doing something are the people to show first: a screen
+   * share outranks a camera, a camera outranks neither, and inside a tier
+   * the original order holds so nothing shuffles for no reason.
+   *
+   * Your own tile takes part in the same rule rather than being pinned. With
+   * your camera off you are the least eventful thing in the room, and
+   * sitting at the top of a list of friends who are visibly doing something
+   * is not a privilege worth keeping.
+   */
+  const rank = (sharing: boolean, camera: boolean): number =>
+    sharing ? 0 : camera ? 1 : 2
+
+  const rows = [
+    {
+      key: 'self',
+      rank: rank(selfSharing, localCamera !== null),
+      at: 0,
+      node: (
+        <Tile
+          key="self"
+          name={selfName}
+          hue={selfHue}
+          stream={localCamera}
+          mirrored={mirrorSelf}
+          active={focused === null}
+          label="Sua prévia"
+          onFocus={() => onFocus(null)}
+          corner={<span className="tm-tile__self-mark label">você</span>}
+          slot={
+            // Clickable, not decorative. An icon that looks like a button and
+            // does nothing is worse than no icon: it teaches people that the
+            // controls here are unreliable.
+            <button
+              type="button"
+              className={`tm-tile__slot tm-tile__slot--button${micOn ? '' : ' is-off'}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleMic()
+              }}
+              title={micOn ? 'Desligar seu microfone' : 'Ligar seu microfone'}
+            >
+              {micOn ? <IconMic size={13} /> : <IconMicOff size={13} />}
+            </button>
+          }
+        />
+      )
+    },
+    ...peers.map((peer) => ({
+      key: peer.info.id,
+      rank: rank(peer.state.screen, peer.state.camera),
+      at: peer.info.joinedAt,
+      node: (
+        <PeerTile
+          key={peer.info.id}
+          peer={peer}
+          mixer={mixer}
+          active={focused === peer.info.id}
+          onFocus={() => onFocus(peer.info.id)}
+          onVolume={(volume) => onVolume(peer.info.id, volume)}
+          onToggleMute={() => onToggleMute(peer.info.id)}
+        />
+      )
+    }))
+  ]
+    .sort((a, b) => a.rank - b.rank || a.at - b.at)
+    .map((row) => row.node)
+
   return (
     <div
       className={`tm-rail tm-rail--${position}`}
@@ -77,44 +153,7 @@ export function MiranteRail({
           <span className="tm-rail__count num">{peers.length + 1}</span>
         </div>
       )}
-      <Tile
-        name={selfName}
-        hue={selfHue}
-        stream={localCamera}
-        mirrored={mirrorSelf}
-        active={focused === null}
-        label="Sua prévia"
-        onFocus={() => onFocus(null)}
-        corner={<span className="tm-tile__self-mark label">você</span>}
-        slot={
-          // Clickable, not decorative. An icon that looks like a button and
-          // does nothing is worse than no icon: it teaches people that the
-          // controls here are unreliable.
-          <button
-            type="button"
-            className={`tm-tile__slot tm-tile__slot--button${micOn ? '' : ' is-off'}`}
-            onClick={(event) => {
-              event.stopPropagation()
-              onToggleMic()
-            }}
-            title={micOn ? 'Desligar seu microfone' : 'Ligar seu microfone'}
-          >
-            {micOn ? <IconMic size={13} /> : <IconMicOff size={13} />}
-          </button>
-        }
-      />
-
-      {peers.map((peer) => (
-        <PeerTile
-          key={peer.info.id}
-          peer={peer}
-          mixer={mixer}
-          active={focused === peer.info.id}
-          onFocus={() => onFocus(peer.info.id)}
-          onVolume={(volume) => onVolume(peer.info.id, volume)}
-          onToggleMute={() => onToggleMute(peer.info.id)}
-        />
-      ))}
+      {rows}
 
     </div>
   )

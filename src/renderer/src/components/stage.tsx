@@ -14,7 +14,9 @@ import {
   IconGrid,
   IconLeave,
   IconSignal,
-  IconTheater
+  IconTheater,
+  IconVolume,
+  IconVolumeOff
 } from './icons'
 import { Logo } from './logo'
 import { SignalMeter } from './signal-meter'
@@ -55,6 +57,9 @@ interface StageProps {
   /** How many broadcasts are joined, so the way back to the grid can appear. */
   siblings: number
   onBackToGrid: () => void
+  /** Whether this broadcast's own sound is the one playing. */
+  listening: boolean
+  onListen: () => void
 }
 
 export function Stage({
@@ -70,7 +75,9 @@ export function Stage({
   onWatch,
   onLeave,
   siblings,
-  onBackToGrid
+  onBackToGrid,
+  listening,
+  onListen
 }: StageProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -326,6 +333,23 @@ export function Stage({
             >
               {/* Named, because the same control also exists on the rail tile
                   and nobody should have to work out which person it affects. */}
+              {/* The sound of the broadcast, on or off. Separate from the
+                  slider below it, which sets how loud this person is once
+                  you are hearing them — and which now turns this on rather
+                  than moving a control with no audible effect. */}
+              <button
+                type="button"
+                className={`tm-stage__listen${listening ? ' is-on' : ''}`}
+                onClick={onListen}
+                aria-pressed={listening}
+                title={
+                  listening
+                    ? `Silenciar a transmissão de ${peer.info.name}`
+                    : `Ouvir a transmissão de ${peer.info.name}`
+                }
+              >
+                {listening ? <IconVolume size={14} /> : <IconVolumeOff size={14} />}
+              </button>
               <span className="tm-stage__volume-who label">{peer.info.name}</span>
               <VolumeSlider
                 volume={peer.audio.volume}
