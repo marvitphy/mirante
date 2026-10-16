@@ -28,6 +28,11 @@ export interface Settings {
   shareWithSound: boolean
   /** Mirror your own camera preview, as a mirror would. */
   mirrorSelf: boolean
+  /**
+   * Your own picture behind you on camera. The picture itself is stored
+   * apart, under BACKGROUND_KEY; on with no picture saved behaves as off.
+   */
+  cameraBackground: boolean
   /** Signalling server. Blank falls back to the one baked into the build. */
   server: string
   /**
@@ -52,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultProfile: 'smooth',
   shareWithSound: true,
   mirrorSelf: true,
+  cameraBackground: false,
   server: '',
   railPosition: 'right'
 }
@@ -88,6 +94,51 @@ export function updateSettings(patch: Partial<Settings>): void {
   for (const listener of listeners) listener()
 }
 
+/**
+ * The background picture, as a JPEG data URL.
+ *
+ * Kept out of the settings object on purpose. It is a few hundred kilobytes,
+ * and every toggle anywhere rewrites the whole settings object — dragging the
+ * picture through JSON on each volume nudge is waste, and a picture too big
+ * for storage must never be able to stop a volume change from saving.
+ */
+const BACKGROUND_KEY = 'mirante.customBackground'
+
+function loadBackground(): string | null {
+  try {
+    return localStorage.getItem(BACKGROUND_KEY)
+  } catch {
+    return null
+  }
+}
+
+let customBackground = loadBackground()
+
+export function getCustomBackground(): string | null {
+  return customBackground
+}
+
+/**
+ * Replace the background picture. Returns false when storage refused it —
+ * usually a full quota — in which case the previous picture is still there
+ * and still in use.
+ */
+export function setCustomBackground(dataUrl: string): boolean {
+  try {
+    localStorage.setItem(BACKGROUND_KEY, dataUrl)
+  } catch {
+    return false
+  }
+  customBackground = dataUrl
+  for (const listener of listeners) listener()
+  return true
+}
+
+/** The picture to put behind you right now, or null for none. */
+export function activeBackground(settings: Settings, picture: string | null): string | null {
+  return settings.cameraBackground ? picture : null
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -95,6 +146,10 @@ function subscribe(listener: () => void): () => void {
 
 export function useSettings(): Settings {
   return useSyncExternalStore(subscribe, getSettings, getSettings)
+}
+
+export function useCustomBackground(): string | null {
+  return useSyncExternalStore(subscribe, getCustomBackground, getCustomBackground)
 }
 
 // ---------------------------------------------------------------------------

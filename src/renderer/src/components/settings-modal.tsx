@@ -1,9 +1,11 @@
 import { useEffect, useState, type JSX, type ReactNode } from 'react'
 
 import {
+  activeBackground,
   deviceLabel,
   listDevices,
   updateSettings,
+  useCustomBackground,
   useSettings,
   type DeviceList
 } from '../lib/settings'
@@ -26,6 +28,8 @@ import { IconClose } from './icons'
 interface SettingsModalProps {
   version: string
   onClose: () => void
+  /** Open the camera picker, where the background is chosen with a live preview. */
+  onAdjustCamera: () => void
 }
 
 const PROFILE_LABELS: Record<ScreenProfileName, string> = {
@@ -40,8 +44,13 @@ const PROFILE_HINTS: Record<ScreenProfileName, string> = {
   thrifty: 'Pra internet apertada ou sala cheia.'
 }
 
-export function SettingsModal({ version, onClose }: SettingsModalProps): JSX.Element {
+export function SettingsModal({
+  version,
+  onClose,
+  onAdjustCamera
+}: SettingsModalProps): JSX.Element {
   const settings = useSettings()
+  const background = activeBackground(settings, useCustomBackground())
   const [devices, setDevices] = useState<DeviceList>({
     cameras: [],
     microphones: [],
@@ -123,6 +132,17 @@ export function SettingsModal({ version, onClose }: SettingsModalProps): JSX.Ele
                 checked={settings.mirrorSelf}
                 onChange={(mirrorSelf) => updateSettings({ mirrorSelf })}
               />
+            </Row>
+
+            {/* A button, not a toggle: choosing a picture without seeing
+                yourself in front of it is choosing blind. */}
+            <Row
+              label="Fundo da câmera"
+              hint={background ? 'Sua imagem atrás de você.' : 'Nenhum. Aparece o que a câmera vê.'}
+            >
+              <button type="button" className="tm-btn" onClick={onAdjustCamera}>
+                Ajustar
+              </button>
             </Row>
           </Group>
 
