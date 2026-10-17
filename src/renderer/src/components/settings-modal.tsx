@@ -12,6 +12,7 @@ import {
 import { formatVolume } from '../lib/format'
 import { SCREEN_PROFILES, type ScreenProfileName } from '../rtc/sdp'
 import { IconClose } from './icons'
+import { ShortcutField } from './shortcut-field'
 
 /**
  * Settings.
@@ -26,6 +27,8 @@ import { IconClose } from './icons'
  */
 
 interface SettingsModalProps {
+  /** Overlay shortcuts another application already owns. */
+  takenShortcuts: Array<'toggle' | 'interact'>
   version: string
   onClose: () => void
   /** Open the camera picker, where the background is chosen with a live preview. */
@@ -44,12 +47,32 @@ const PROFILE_HINTS: Record<ScreenProfileName, string> = {
   thrifty: 'Pra internet apertada ou sala cheia.'
 }
 
+/**
+ * Sections, in the order someone actually reaches for them.
+ *
+ * One long scroll was fine with four settings and stopped being fine
+ * somewhere around twelve — and the overlay adds a shortcut, a position and
+ * an opacity on top of that. Tabs here match the source picker, which
+ * already solved the same problem on the same kind of sheet.
+ */
+const TABS = [
+  { id: 'devices', label: 'Dispositivos' },
+  { id: 'broadcast', label: 'Transmissão' },
+  { id: 'audio', label: 'Áudio' },
+  { id: 'interface', label: 'Interface' },
+  { id: 'advanced', label: 'Avançado' }
+] as const
+
+type TabId = (typeof TABS)[number]['id']
+
 export function SettingsModal({
+  takenShortcuts,
   version,
   onClose,
   onAdjustCamera
 }: SettingsModalProps): JSX.Element {
   const settings = useSettings()
+  const [tab, setTab] = useState<TabId>('devices')
   const background = activeBackground(settings, useCustomBackground())
   const [devices, setDevices] = useState<DeviceList>({
     cameras: [],
@@ -92,8 +115,26 @@ export function SettingsModal({
           </button>
         </header>
 
-        <div className="tm-sheet__scroll">
-          <Group title="Dispositivos">
+        <nav className="tm-tabs" role="tablist" aria-label="Seções das configurações">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`tm-tab${tab === t.id ? ' is-on' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+          <span className="tm-tabs__fill" />
+        </nav>
+
+        <div className="tm-sheet__scroll" role="tabpanel">
+          {tab === 'devices' && (
+            <>
+              <Group title="Dispositivos">
             <Row label="Câmera" hint="Usada quando você liga a câmera.">
               <Picker
                 value={settings.cameraId}
@@ -145,36 +186,12 @@ export function SettingsModal({
               </button>
             </Row>
           </Group>
+            </>
+          )}
 
-          <Group title="Layout">
-            <Row
-              label="Lista de pessoas"
-              hint={
-                settings.railPosition === 'right'
-                  ? 'Coluna fixa à direita. Nada fica por cima do vídeo.'
-                  : 'Faixa sobre o vídeo, some junto com os controles.'
-              }
-            >
-              <div className="tm-segrow">
-                <button
-                  type="button"
-                  className={`tm-seg${settings.railPosition === 'right' ? ' is-on' : ''}`}
-                  onClick={() => updateSettings({ railPosition: 'right' })}
-                >
-                  Direita
-                </button>
-                <button
-                  type="button"
-                  className={`tm-seg${settings.railPosition === 'bottom' ? ' is-on' : ''}`}
-                  onClick={() => updateSettings({ railPosition: 'bottom' })}
-                >
-                  Embaixo
-                </button>
-              </div>
-            </Row>
-          </Group>
-
-          <Group title="Transmissão">
+          {tab === 'broadcast' && (
+            <>
+              <Group title="Transmissão">
             <Row label="Qualidade padrão" hint={PROFILE_HINTS[settings.defaultProfile]}>
               <div className="tm-segrow">
                 {(Object.keys(PROFILE_LABELS) as ScreenProfileName[]).map((key) => (
@@ -208,8 +225,12 @@ export function SettingsModal({
               />
             </Row>
           </Group>
+            </>
+          )}
 
-          <Group title="O que você escuta">
+          {tab === 'audio' && (
+            <>
+              <Group title="O que você escuta">
             <Row label="Volume geral" hint="Afeta todo mundo de uma vez.">
               <div className="tm-setting__slider">
                 <input
@@ -234,8 +255,94 @@ export function SettingsModal({
               />
             </Row>
           </Group>
+            </>
+          )}
 
-          <Group title="Conexão">
+          {tab === 'interface' && (
+            <>
+              <Group title="Overlay">
+                <Row
+                  label="Mostrar sobre o jogo"
+                  hint="Uma folha transparente por cima de tudo, com as câmeras e as transmissões."
+                >
+                  <Toggle
+                    checked={settings.overlayEnabled}
+                    onChange={(overlayEnabled) => updateSettings({ overlayEnabled })}
+                  />
+                </Row>
+
+                <Row
+                  label="Ligar e desligar"
+                  hint="Funciona com o jogo em primeiro plano."
+                >
+                  <ShortcutField
+                    value={settings.overlayToggleKey}
+                    taken={takenShortcuts.includes('toggle')}
+                    onChange={(overlayToggleKey) => updateSettings({ overlayToggleKey })}
+                  />
+                </Row>
+
+                <Row
+                  label="Mexer no overlay"
+                  hint="Enquanto estiver ligado, o mouse atravessa. Isto segura o mouse pra você arrastar."
+                >
+                  <ShortcutField
+                    value={settings.overlayInteractKey}
+                    taken={takenShortcuts.includes('interact')}
+                    onChange={(overlayInteractKey) => updateSettings({ overlayInteractKey })}
+                  />
+                </Row>
+
+                <Row label="Transparência" hint="Quanto o overlay aparece enquanto você joga.">
+                  <div className="tm-setting__slider">
+                    <input
+                      type="range"
+                      min={0.2}
+                      max={1}
+                      step={0.05}
+                      value={settings.overlayOpacity}
+                      onChange={(e) =>
+                        updateSettings({ overlayOpacity: Number(e.target.value) })
+                      }
+                    />
+                    <span className="num">{Math.round(settings.overlayOpacity * 100)}%</span>
+                  </div>
+                </Row>
+              </Group>
+
+              <Group title="Layout">
+            <Row
+              label="Lista de pessoas"
+              hint={
+                settings.railPosition === 'right'
+                  ? 'Coluna fixa à direita. Nada fica por cima do vídeo.'
+                  : 'Faixa sobre o vídeo, some junto com os controles.'
+              }
+            >
+              <div className="tm-segrow">
+                <button
+                  type="button"
+                  className={`tm-seg${settings.railPosition === 'right' ? ' is-on' : ''}`}
+                  onClick={() => updateSettings({ railPosition: 'right' })}
+                >
+                  Direita
+                </button>
+                <button
+                  type="button"
+                  className={`tm-seg${settings.railPosition === 'bottom' ? ' is-on' : ''}`}
+                  onClick={() => updateSettings({ railPosition: 'bottom' })}
+                >
+                  Embaixo
+                </button>
+              </div>
+            </Row>
+          </Group>
+            </>
+          )}
+
+          {tab === 'advanced' && (
+            <>
+              <Group title="Conexão">
             <Row
               label="Servidor"
               hint="Só coordena a conexão. A imagem vai direto de um pro outro."
@@ -249,7 +356,7 @@ export function SettingsModal({
             </Row>
           </Group>
 
-          <Group title="Sobre">
+              <Group title="Sobre">
             <Row label="Versão">
               <span className="tm-setting__readout num">v{version}</span>
             </Row>
@@ -259,6 +366,8 @@ export function SettingsModal({
               </span>
             </Row>
           </Group>
+            </>
+          )}
         </div>
 
         <footer className="tm-sheet__foot">

@@ -1,0 +1,502 @@
+/*
+ * The overlay sheet.
+ *
+ * Lives in its own transparent window on top of everything, so every rule
+ * here is written as if the background were a game: nothing opaque that is
+ * not a tile, no full-surface tint, no shadow pretending to be depth over
+ * content we cannot see.
+ *
+ * Two states. Passive is the usual one — faded, and invisible to the mouse,
+ * which the main process arranges. Live takes the mouse so tiles can be
+ * moved, and says so, because a sheet that silently started swallowing
+ * clicks would look like the game had frozen.
+ */
+
+.tm-overlay-root {
+  position: fixed;
+  inset: 0;
+}
+
+.tm-ov {
+  position: fixed;
+  inset: 0;
+  font-family: var(--font-ui);
+  transition: opacity 160ms var(--ease-out);
+}
+
+/* Taking the mouse is a state worth announcing: a thin accent frame, and
+   nothing else, so the game underneath stays readable. */
+.tm-ov.is-live::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid hsl(from var(--accent) h s l / 0.55);
+}
+
+/* --- where tiles sit ---------------------------------------------------- */
+
+.tm-ov__dock {
+  position: absolute;
+  display: flex;
+  gap: var(--s-3);
+  padding: var(--s-5);
+}
+/* Corners stack downward; the bottom centre is a row of faces, which is the
+   shape that arrangement exists for. */
+.tm-ov__dock--tl,
+.tm-ov__dock--tr,
+.tm-ov__dock--bl,
+.tm-ov__dock--br {
+  flex-direction: column;
+}
+.tm-ov__dock--tl {
+  top: 0;
+  left: 0;
+}
+.tm-ov__dock--tr {
+  top: 0;
+  right: 0;
+  align-items: flex-end;
+}
+.tm-ov__dock--bl {
+  bottom: 0;
+  left: 0;
+  justify-content: flex-end;
+}
+.tm-ov__dock--br {
+  bottom: 0;
+  right: 0;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+.tm-ov__dock--bc {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: flex-end;
+}
+
+/* --- a tile ------------------------------------------------------------- */
+
+.tm-ov__tile {
+  position: relative;
+  width: 168px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: hsl(258 45% 3% / 0.92);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-plate);
+}
+.tm-ov__tile.is-wide {
+  width: 288px;
+}
+.tm-ov__tile.is-grabbable {
+  cursor: grab;
+}
+.tm-ov__tile.is-dragging {
+  cursor: grabbing;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-pop);
+}
+
+.tm-ov__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tm-ov__video.is-mirrored {
+  transform: scaleX(-1);
+}
+
+.tm-ov__name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 2px var(--s-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(to top, hsl(258 45% 1% / 0.85), transparent);
+  font-size: var(--text-nano);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* --- where it can land -------------------------------------------------- */
+/* Only drawn mid-drag. The rest of the time the sheet should show the game,
+   not a diagram of itself. */
+
+.tm-ov__zone {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 210px;
+  height: 128px;
+  padding: var(--s-2);
+  text-align: center;
+  border: 1px dashed hsl(from var(--accent) h s l / 0.35);
+  background: hsl(258 45% 2% / 0.4);
+  color: var(--text-muted);
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  pointer-events: none;
+  transition:
+    border-color 120ms var(--ease-out),
+    background 120ms var(--ease-out),
+    color 120ms var(--ease-out);
+}
+.tm-ov__zone.is-target {
+  border-style: solid;
+  border-color: var(--accent);
+  background: hsl(from var(--accent) h s l / 0.14);
+  color: var(--text-primary);
+}
+
+.tm-ov__zone--tl {
+  top: var(--s-4);
+  left: var(--s-4);
+}
+.tm-ov__zone--tr {
+  top: var(--s-4);
+  right: var(--s-4);
+}
+.tm-ov__zone--bl {
+  bottom: var(--s-4);
+  left: var(--s-4);
+}
+.tm-ov__zone--br {
+  bottom: var(--s-4);
+  right: var(--s-4);
+}
+.tm-ov__zone--bc {
+  bottom: var(--s-4);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-ov,
+  .tm-ov__zone {
+    transition: none;
+  }
+}
+
+/* --- recording a shortcut ----------------------------------------------- */
+
+.tm-shortcut {
+  min-width: 148px;
+  height: var(--control-h);
+  padding: 0 var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-mono);
+  cursor: pointer;
+  transition:
+    border-color var(--t-pop) var(--ease-out),
+    color var(--t-pop) var(--ease-out);
+}
+.tm-shortcut:hover {
+  border-color: var(--text-tertiary);
+}
+.tm-shortcut.is-recording {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Claimed by another application: the keys are stored, they simply will not
+   fire. Saying so beats letting someone press a dead combination. */
+.tm-shortcut.is-taken {
+  border-color: var(--tally);
+  color: var(--tally);
+}
+
+/* --- picking a tile up --------------------------------------------------- */
+/*
+ * Lifted, not teleported. The tile grows slightly and gains a shadow, which
+ * is the whole vocabulary needed to say "this is in your hand now" — and the
+ * grab point stays under the cursor, so it does not leap the instant you
+ * touch it.
+ */
+.tm-ov__tile.is-held {
+  transform: translate(-50%, -50%) scale(1.04);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-pop);
+  cursor: grabbing;
+}
+.tm-ov__tile {
+  transition:
+    border-color 140ms var(--ease-out),
+    box-shadow 140ms var(--ease-out);
+}
+
+/* --- per-tile controls --------------------------------------------------- */
+
+.tm-ov__tools {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out);
+}
+.tm-ov__tile:hover .tm-ov__tools {
+  opacity: 1;
+}
+
+.tm-ov__tool {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-secondary);
+  background: hsl(258 45% 2% / 0.88);
+  border: 1px solid var(--rule);
+  cursor: pointer;
+}
+.tm-ov__tool:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+.tm-ov__tool.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Their level, drawn only when it is not the default — a row of tiles should
+   not be a row of progress bars. */
+.tm-ov__level {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: hsl(258 45% 1% / 0.6);
+}
+.tm-ov__level > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* --- resizing ------------------------------------------------------------ */
+/*
+ * The handle sits on the corner facing the middle of the screen, so a tile
+ * always grows into empty space instead of off the edge it is pinned to.
+ */
+.tm-ov__grip {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out);
+}
+.tm-ov__tile:hover .tm-ov__grip {
+  opacity: 1;
+}
+.tm-ov__grip::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-bottom: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+}
+
+.tm-ov__grip--tl {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+.tm-ov__grip--tr {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+.tm-ov__grip--tr::after,
+.tm-ov__grip--br::after {
+  border-right: 0;
+  border-left: 2px solid var(--accent);
+}
+.tm-ov__grip--bl {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.tm-ov__grip--bc {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.tm-ov__grip--bl::after,
+.tm-ov__grip--bc::after,
+.tm-ov__grip--br::after {
+  border-bottom: 0;
+  border-top: 2px solid var(--accent);
+}
+.tm-ov__grip--br {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+
+/* --- drop targets that show the result ----------------------------------- */
+
+.tm-ov__zone {
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 160ms var(--ease-out),
+    transform 220ms cubic-bezier(0.22, 1.2, 0.36, 1),
+    width 220ms cubic-bezier(0.22, 1.2, 0.36, 1),
+    height 220ms cubic-bezier(0.22, 1.2, 0.36, 1),
+    border-color 120ms var(--ease-out),
+    background 120ms var(--ease-out),
+    color 120ms var(--ease-out);
+}
+.tm-ov__zone.is-open {
+  opacity: 1;
+  transform: scale(1);
+}
+.tm-ov__zone--bc {
+  transform: translateX(-50%) scale(0.94);
+}
+.tm-ov__zone--bc.is-open {
+  transform: translateX(-50%) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-ov__tile,
+  .tm-ov__tools,
+  .tm-ov__grip {
+    transition: none;
+  }
+  .tm-ov__tile.is-held {
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* --- the sheet's own controls ------------------------------------------- */
+/*
+ * Shown only while the sheet holds the mouse, which is also the only moment
+ * they can be used. Transparency lives here rather than in the settings
+ * modal because a modal covers the thing you are adjusting against — you
+ * cannot judge how see-through to be while looking at a dialog.
+ *
+ * The exit hint is not decoration: in interactive mode there is no window
+ * frame and no obvious way out, and a sheet that has silently taken the
+ * mouse looks like the game has frozen.
+ */
+.tm-ov__bar {
+  position: absolute;
+  top: var(--s-4);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-4);
+  background: hsl(258 45% 3% / 0.94);
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-pop);
+  animation: tm-ov-bar 200ms var(--ease-out);
+}
+
+@keyframes tm-ov-bar {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+}
+
+.tm-ov__bar-label {
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tm-ov__bar-range {
+  width: 132px;
+  accent-color: var(--accent);
+}
+
+.tm-ov__bar-value {
+  min-width: 4ch;
+  font-size: var(--text-nano);
+  letter-spacing: var(--tracking-mono);
+  color: var(--text-primary);
+}
+
+.tm-ov__bar-btn {
+  padding: 3px var(--s-3);
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--text-secondary);
+  font-size: var(--text-nano);
+  cursor: pointer;
+}
+.tm-ov__bar-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.tm-ov__bar-exit {
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: var(--text-nano);
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-ov__bar {
+    animation: none;
+  }
+}
+
+/* --- where it will land, inside a corner --------------------------------- */
+/*
+ * Which corner a tile goes to is answered by the zones; which POSITION
+ * inside that corner is answered here. Without it, a drop into an occupied
+ * corner is a guess — and order inside a corner used to be the app's to
+ * decide, which is why a camera could never be placed above a broadcast
+ * sharing the same one.
+ */
+.tm-ov__caret {
+  flex: 0 0 auto;
+  align-self: stretch;
+  background: var(--accent);
+  box-shadow: 0 0 10px hsl(from var(--accent) h s l / 0.6);
+  animation: tm-caret 140ms var(--ease-out);
+}
+/* Corners stack downward, so the marker is a horizontal rule between tiles;
+   the bottom centre is a row, so there it stands upright. */
+.tm-ov__dock--tl .tm-ov__caret,
+.tm-ov__dock--tr .tm-ov__caret,
+.tm-ov__dock--bl .tm-ov__caret,
+.tm-ov__dock--br .tm-ov__caret {
+  height: 2px;
+}
+.tm-ov__dock--bc .tm-ov__caret {
+  width: 2px;
+}
+
+@keyframes tm-caret {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-ov__caret {
+    animation: none;
+  }
+}

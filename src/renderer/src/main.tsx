@@ -7,6 +7,7 @@ import './styles/app.css'
 import './styles/stage.css'
 import './styles/rail.css'
 import './styles/controls.css'
+import './styles/overlay.css'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root missing from index.html')

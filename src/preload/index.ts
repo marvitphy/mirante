@@ -53,6 +53,30 @@ export interface MiranteApi {
   hotkeys: {
     on: (key: HotkeyChannel, handler: () => void) => () => void
   }
+  /**
+   * The overlay sheet: a transparent, always-on-top window over the game.
+   *
+   * The window itself is opened by the renderer with `window.open`, because
+   * that keeps it in the same process as the live MediaStreams. Everything
+   * here is about what KIND of window it is, which only the main process can
+   * decide.
+   */
+  overlay: {
+    /** Show or hide the sheet. */
+    show: (show: boolean) => void
+    /** Take the mouse, or hand it back to whatever is underneath. */
+    setInteractive: (on: boolean) => void
+    state: () => Promise<{ open: boolean; interactive: boolean }>
+    /** Claim the global shortcuts. Resolves with the ones already taken. */
+    bindShortcuts: (shortcuts: {
+      toggle: string
+      interact: string
+    }) => Promise<Array<'toggle' | 'interact'>>
+    onInteractive: (handler: (on: boolean) => void) => () => void
+    onToggle: (handler: () => void) => () => void
+    onInteract: (handler: () => void) => () => void
+  }
+
   /** Auto-update from GitHub Releases. Packaged builds only. */
   update: {
     state: () => Promise<UpdateState>
@@ -99,6 +123,21 @@ const api: MiranteApi = {
   hotkeys: {
     on: (key, handler) => subscribe(`hotkey:${key}`, () => handler())
   },
+  overlay: {
+    show: (show: boolean) => ipcRenderer.send('overlay:show', show),
+    setInteractive: (on: boolean) => ipcRenderer.send('overlay:interactive', on),
+    state: () =>
+      ipcRenderer.invoke('overlay:state') as Promise<{ open: boolean; interactive: boolean }>,
+    bindShortcuts: (shortcuts) =>
+      ipcRenderer.invoke('overlay:bind-shortcuts', shortcuts) as Promise<
+        Array<'toggle' | 'interact'>
+      >,
+    onInteractive: (handler) =>
+      subscribe('overlay:interactive', (on) => handler(on as boolean)),
+    onToggle: (handler) => subscribe('overlay:hotkey:toggle', () => handler()),
+    onInteract: (handler) => subscribe('overlay:hotkey:interact', () => handler())
+  },
+
   update: {
     state: () => ipcRenderer.invoke('update:state') as Promise<UpdateState>,
     check: () => ipcRenderer.invoke('update:check') as Promise<UpdateState>,

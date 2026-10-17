@@ -2,6 +2,12 @@ import { join } from 'node:path'
 import { app, BrowserWindow, globalShortcut, ipcMain, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 
+import {
+  bindOverlayShortcuts,
+  closeOverlay,
+  registerOverlay,
+  type OverlayShortcuts
+} from './overlay'
 import { cancelPendingCapture, registerCapture } from './capture'
 import { startLogging } from './log'
 import { registerProcessAudio, stopProcessAudio } from './process-audio'
@@ -115,6 +121,10 @@ void app.whenReady().then(() => {
   registerCapture()
   registerProcessAudio(mainWindow)
   registerHotkeys()
+  registerOverlay(mainWindow)
+  ipcMain.handle('overlay:bind-shortcuts', (event, shortcuts: OverlayShortcuts) =>
+    bindOverlayShortcuts(event.sender, shortcuts)
+  )
   // The IPC surface always exists, so the renderer can ask about updates in
   // any build. Only a packaged build actually drives the updater — there is
   // no release feed to read from a dev tree.
@@ -127,6 +137,7 @@ void app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
+  closeOverlay()
   globalShortcut.unregisterAll()
   stopUpdater()
 })

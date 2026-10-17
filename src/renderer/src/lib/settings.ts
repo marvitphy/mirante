@@ -44,6 +44,34 @@ export interface Settings {
    * 16:9 content there is width to spare and height to save.
    */
   railPosition: 'bottom' | 'right'
+
+  /**
+   * The overlay sheet over a fullscreen game.
+   *
+   * Off by default: a transparent always-on-top window is something you ask
+   * for, not something that appears over your game the first time you open
+   * the app.
+   */
+  overlayEnabled: boolean
+  /** How visible the sheet is while it is passive, 0..1. */
+  overlayOpacity: number
+  /**
+   * Accelerators, stored because the defaults are not reliable.
+   *
+   * On this very machine three of the app's fixed hotkeys were already
+   * claimed by other software and silently did nothing. A shortcut you
+   * cannot change belongs to whoever registered it first.
+   */
+  overlayToggleKey: string
+  overlayInteractKey: string
+  /** Which corner each tile sits in, keyed by tile id. */
+  overlayAnchors: Record<string, string>
+  /** Tile width in pixels, keyed by tile id. Free, not stepped. */
+  overlaySizes: Record<string, number>
+  /** Position within its corner, keyed by tile id. Lower comes first. */
+  overlayOrder: Record<string, number>
+  /** Tiles taken off the sheet. They stay in the Mirante window. */
+  overlayHidden: string[]
 }
 
 const STORE_KEY = 'mirante.settings'
@@ -59,7 +87,15 @@ export const DEFAULT_SETTINGS: Settings = {
   mirrorSelf: true,
   cameraBackground: false,
   server: '',
-  railPosition: 'right'
+  railPosition: 'right',
+  overlayEnabled: false,
+  overlayOpacity: 0.75,
+  overlayToggleKey: 'CommandOrControl+Shift+O',
+  overlayInteractKey: 'CommandOrControl+Shift+K',
+  overlayAnchors: {},
+  overlaySizes: {},
+  overlayOrder: {},
+  overlayHidden: []
 }
 
 function load(): Settings {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 
 import type { AudioMixer } from '../rtc/audio-mixer'
 import type { PeerView } from '../rtc/mesh-session'
+import { Avatar } from './avatar'
 import { IconMic, IconMicOff, IconScreen, IconVolume, IconVolumeOff } from './icons'
 import { formatVolume } from '../lib/format'
 import { SignalMeter } from './signal-meter'
@@ -255,7 +256,7 @@ function PeerTile({
   const live = peer.link === 'live'
   // Broadcasting, but we are not receiving it. An offer, not a picture — and
   // deliberately NOT the red tally, which means "you are on air".
-  const inviting = !peer.watching && (peer.state.screen || peer.state.camera)
+  const inviting = !peer.watching && peer.state.screen
   // Anything other than "normal, audible" stays visible without hovering, so
   // you can see that you turned someone down three days ago.
   const touched = peer.audible && (peer.audio.muted || peer.audio.volume !== 1)
@@ -348,20 +349,3 @@ function PeerTile({
   )
 }
 
-function Avatar({ name, hue }: { name: string; hue: number }): JSX.Element {
-  const initial = name.trim().charAt(0).toUpperCase() || '?'
-  return (
-    <span
-      className="tm-avatar"
-      style={{
-        // Hue comes from the peer id, so one person looks the same to everyone
-        // in the room. Lightness and saturation are fixed, so no avatar ever
-        // out-shouts the stage.
-        background: `hsl(${hue} 40% 24%)`,
-        color: `hsl(${hue} 70% 80%)`
-      }}
-    >
-      {initial}
-    </span>
-  )
-}

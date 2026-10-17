@@ -426,7 +426,7 @@ export class MeshSession {
         // cannot see. What it does not do is play any of it: sound is the
         // part you point at, one broadcast at a time.
         for (const peer of this.peers.values()) {
-          if (peer.state.screen || peer.state.camera) this.watch(peer.info.id)
+          if (peer.state.screen) this.watch(peer.info.id)
         }
         break
       }
@@ -469,13 +469,15 @@ export class MeshSession {
         // wanted to make: it left people looking at cards instead of
         // pictures and produced a different answer on every screen. The
         // only choice worth offering is which one you can hear.
-        if (!wasPublishing && nowPublishing) {
-          // Was there anything on the stage before this? Only then does a
-          // new broadcast get to fill it. Otherwise it arrives as what it
-          // is — a sound, a badge, and a panel in the grid — and whoever
-          // was mid-way through watching something stays there.
+        // Connect for any media: a camera and a microphone both need the
+        // link, and their voice is never optional.
+        if (!wasPublishing && nowPublishing) this.requestStream(message.id)
+
+        // Only a shared screen reaches the stage. Switching a camera on is
+        // showing your face, not starting a broadcast, and it should no
+        // more take the stage than unmuting does.
+        if (!wasSharing && message.state.screen) {
           const stageWasEmpty = !this.anythingLive(message.id)
-          this.requestStream(message.id)
           this.watch(message.id)
           if (stageWasEmpty) this.focused = message.id
         }
@@ -681,8 +683,14 @@ export class MeshSession {
         }
         if (!stream.getTracks().includes(track)) stream.addTrack(track)
 
-        if (slot === 'screen') peer.screen = stream
-        if (slot === 'camera') peer.camera = stream
+        // What is VISIBLE follows the announced state, not the arrival of
+        // a track. Fixed slots mean all four transceivers are negotiated at
+        // once, so `ontrack` fires for every slot — including the empty
+        // ones. Trusting it gave everybody a permanent black rectangle
+        // where their camera would be, whether or not they had ever
+        // switched one on.
+        peer.screen = peer.state.screen ? (peer.streams.get('screen') ?? null) : null
+        peer.camera = peer.state.camera ? (peer.streams.get('camera') ?? null) : null
 
         if (track.kind === 'audio') {
           // Both audio slots feed one per-person volume control: from the
@@ -1019,10 +1027,20 @@ export class MeshSession {
   private requestStream(peerId: string): void {
     this.cancelRejoin(peerId)
     this.scheduleJoinRetry(peerId)
-    // State the intent with the request, so a publisher never spends upload
-    // on a picture nobody opened.
-    const peer = this.peers.get(peerId)
-    this.signaling?.send({ t: 'watchVideo', to: peerId, video: peer?.watching ?? false })
+    // Ask for the picture. Always.
+    //
+    // This used to send whatever `watching` happened to be, which at this
+    // point is almost always false — `requestStream` runs BEFORE `watch`.
+    // So every publisher was told "do not send video" and only some of them
+    // were ever told otherwise. Against a client running an older build,
+    // which gates the camera along with the screen, that mute was permanent
+    // and silent: the person saw their own camera preview and nobody else
+    // saw them at all.
+    //
+    // Wanting the picture is the normal state and the safe default. The
+    // only thing that ever mutes it is stepping out of a broadcast on
+    // purpose, and that says so at the moment it happens.
+    this.signaling?.send({ t: 'watchVideo', to: peerId, video: true })
     this.mixer.resume()
     this.signaling?.send({ t: 'join', to: peerId })
   }
@@ -1103,15 +1121,21 @@ export class MeshSession {
 
   /** Point one link's slots at what we are publishing. Never throws. */
   private async syncLink(link: PeerLink): Promise<void> {
-    // Leaving a broadcast stops the broadcast — picture AND the sound of
-    // whatever is being shown. What it must never stop is the MICROPHONE:
-    // the game's audio is part of the thing you stepped away from, your
-    // friend's voice is not, and gating them together would mean the only
-    // way to stop watching someone was to stop hearing them.
+    // What stepping out of a broadcast stops, and what it never stops.
+    //
+    // The BROADCAST is the shared screen and the sound of whatever is on
+    // it: both go. PRESENCE is the camera and the microphone: both stay.
+    //
+    // The camera used to be gated along with the screen, and that cost
+    // people their faces. The gate is opened by `watch`, and `watch` only
+    // runs on the transition from publishing nothing to publishing
+    // something — so someone who already had a microphone on and then
+    // switched their camera on never crossed it. They saw their own
+    // preview; nobody else saw anything, with no way to tell why.
     const watching = !this.videoMuted.has(link.peerId)
     const screen = watching ? (this.local.screen?.getVideoTracks()[0] ?? null) : null
     const screenAudio = watching ? (this.local.screen?.getAudioTracks()[0] ?? null) : null
-    const camera = watching ? (this.local.camera?.getVideoTracks()[0] ?? null) : null
+    const camera = this.local.camera?.getVideoTracks()[0] ?? null
     const mic = this.local.mic?.getAudioTracks()[0] ?? null
 
     try {
@@ -1284,10 +1308,12 @@ export class MeshSession {
    * itself. A quiet room has nothing to interrupt; any other room does.
    */
   private anythingLive(exclude?: string): boolean {
-    if (this.local.screen !== null || this.local.camera !== null) return true
+    // Screens only. A camera is not something the stage is holding, so it
+    // is not something a new broadcast would be interrupting.
+    if (this.local.screen !== null) return true
     for (const peer of this.peers.values()) {
       if (peer.info.id === exclude) continue
-      if (peer.state.screen || peer.state.camera) return true
+      if (peer.state.screen) return true
     }
     return false
   }

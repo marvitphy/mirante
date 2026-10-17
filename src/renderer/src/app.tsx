@@ -7,6 +7,9 @@ import { JoinScreen } from './components/join-screen'
 import { MiranteRail } from './components/mirante-rail'
 import { CameraPicker } from './components/camera-picker'
 import { SettingsModal } from './components/settings-modal'
+import { OverlayPortal } from './overlay/overlay-portal'
+import { OverlaySheet, tilesFromRoom, type Anchor } from './overlay/overlay-sheet'
+import { prettyShortcut } from './components/shortcut-field'
 import { StageGrid } from './components/stage-grid'
 import { SourcePicker } from './components/source-picker'
 import { Stage, type ViewMode } from './components/stage'
@@ -17,6 +20,7 @@ import {
   getSettings,
   listDevices,
   useCustomBackground,
+  updateSettings,
   useSettings
 } from './lib/settings'
 import { useAutoHide } from './lib/use-auto-hide'
@@ -51,8 +55,26 @@ interface JoinDetails {
   server: string
 }
 
+/**
+ * A saved server that nobody chose on purpose.
+ *
+ * The join details are persisted whole, server included, and the server box
+ * is prefilled with whatever the build's default was at the time. So the day
+ * the development default stopped being localhost, every machine that had
+ * ever joined in development carried on dialling localhost — stored as a
+ * deliberate preference, which it never was. The app just said
+ * "Reconectando" at a port with nothing behind it.
+ *
+ * Anything pointing at this machine is treated as leftover rather than
+ * intent: blank it, and the build's default applies. Someone genuinely
+ * running a worker locally types it again, once.
+ */
+function isLeftoverServer(server: string): boolean {
+  return /^wss?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(server.trim())
+}
+
 function loadDefaults(): JoinDetails {
-  const fallback: JoinDetails = { name: '', room: '', server: DEFAULT_SERVER }
+  const fallback: JoinDetails = { name: '', room: '', server: '' }
   try {
     const raw = localStorage.getItem(STORE_KEY)
     if (!raw) return fallback
@@ -60,8 +82,9 @@ function loadDefaults(): JoinDetails {
     return {
       name: stored.name ?? fallback.name,
       room: stored.room ?? fallback.room,
-      // A previously-saved empty address must never beat the built-in one.
-      server: stored.server?.trim() || fallback.server
+      // A previously-saved empty address must never beat the built-in one,
+      // and a leftover localhost is not an address anyone chose.
+      server: isLeftoverServer(stored.server ?? '') ? '' : (stored.server?.trim() || '')
     }
   } catch {
     // Corrupt or unavailable storage is not worth surfacing.
@@ -450,6 +473,89 @@ export function App(): JSX.Element {
    * broadcasting. Three bugs, one cause. Asking what exists instead of
    * trusting a field to have been set removes the whole class.
    */
+  /**
+   * The overlay: a transparent sheet over whatever is in front.
+   *
+   * Two independent switches, because they answer different questions.
+   * `overlayEnabled` is whether the sheet exists at all, and lives in
+   * settings. `overlayLive` is whether it currently takes the mouse, which
+   * is a moment-to-moment thing and belongs in memory — a sheet that came
+   * back holding the mouse after a restart would be a sheet nobody could
+   * click past.
+   */
+  const [overlayLive, setOverlayLive] = useState(false)
+  const [takenShortcuts, setTakenShortcuts] = useState<Array<'toggle' | 'interact'>>([])
+
+  /**
+   * The overlay's tiles, rebuilt only when the room's media changes.
+   *
+   * Built inline at first, which meant a new array on every render — and the
+   * snapshot re-renders once a second for telemetry alone. Downstream that
+   * looked like the whole sheet being replaced continuously.
+   */
+  const overlayTiles = useMemo(
+    () =>
+      tilesFromRoom(
+        snapshot.peers,
+        snapshot.local.camera ? (selfView?.stream ?? snapshot.local.camera) : null,
+        snapshot.local.screen,
+        settings.mirrorSelf,
+        snapshot.self?.name ?? 'você',
+        snapshot.self?.hue ?? 268
+      ),
+    [
+      selfView?.stream,
+      settings.mirrorSelf,
+      snapshot.local.camera,
+      snapshot.local.screen,
+      snapshot.peers,
+      snapshot.self?.hue,
+      snapshot.self?.name
+    ]
+  )
+
+  useEffect(() => {
+    const api = window.mirante.overlay
+    if (!api) return
+    void api
+      .bindShortcuts({
+        toggle: settings.overlayToggleKey,
+        interact: settings.overlayInteractKey
+      })
+      .then(setTakenShortcuts)
+      .catch(() => setTakenShortcuts([]))
+  }, [settings.overlayInteractKey, settings.overlayToggleKey])
+
+  useEffect(() => {
+    const api = window.mirante.overlay
+    if (!api) return
+    api.show(settings.overlayEnabled)
+    if (!settings.overlayEnabled) setOverlayLive(false)
+  }, [settings.overlayEnabled])
+
+  useEffect(() => {
+    const api = window.mirante.overlay
+    if (!api) return
+    api.setInteractive(overlayLive)
+  }, [overlayLive])
+
+  useEffect(() => {
+    const api = window.mirante.overlay
+    if (!api) return
+    const offToggle = api.onToggle(() => {
+      updateSettings({ overlayEnabled: !getSettings().overlayEnabled })
+    })
+    const offInteract = api.onInteract(() => {
+      // Nothing to hold the mouse for while the sheet is hidden.
+      if (!getSettings().overlayEnabled) return
+      setOverlayLive((on) => !on)
+    })
+    return () => {
+      offToggle()
+      offInteract()
+    }
+  }, [])
+
   const stage = useMemo(() => {
     /**
      * Every broadcast in the room gets a panel, joined or not.
@@ -464,8 +570,15 @@ export function App(): JSX.Element {
      * truer: the stage becomes a picture of the room rather than a picture
      * of your subscriptions.
      */
-    const live = snapshot.peers.filter((p) => p.state.screen || p.state.camera)
-    const watched = live.filter((p) => p.watching && (p.screen !== null || p.camera !== null))
+    // A broadcast is a SHARED SCREEN. A camera is presence: it belongs in
+    // the list of people and on the overlay, never on the stage.
+    //
+    // Treating the two as one thing meant switching your camera on read as
+    // going live — it put your face on everyone's stage, counted as "the
+    // room is busy" so the next real broadcast could not take the stage by
+    // itself, and announced you as live to people who only saw you appear.
+    const live = snapshot.peers.filter((p) => p.state.screen)
+    const watched = live.filter((p) => p.watching && p.screen !== null)
     const localStream = snapshot.local.screen
     // Your own preview is a panel like any other: while watching friends you
     // still want to see that what you are sending is what you meant to send.
@@ -618,7 +731,7 @@ export function App(): JSX.Element {
         // Clicking a broadcast you are not receiving is how you join it.
         // Focusing something you cannot see would just show an empty stage.
         const peer = peerId ? snapshot.peers.find((p) => p.info.id === peerId) : null
-        if (peer && !peer.watching && (peer.state.screen || peer.state.camera)) {
+        if (peer && !peer.watching && peer.state.screen) {
           session.watch(peer.info.id)
           return
         }
@@ -714,6 +827,60 @@ export function App(): JSX.Element {
         {settings.railPosition === 'bottom' && rail}
       </main>
 
+      <OverlayPortal open={settings.overlayEnabled}>
+        <OverlaySheet
+          tiles={overlayTiles}
+          anchors={settings.overlayAnchors as Record<string, Anchor>}
+          sizes={settings.overlaySizes}
+          order={settings.overlayOrder}
+          hidden={settings.overlayHidden}
+          interactive={overlayLive}
+          opacity={settings.overlayOpacity}
+          listening={snapshot.listening}
+          onAnchor={(tileId, anchor, index) => {
+            const current = getSettings()
+            const anchors = { ...current.overlayAnchors, [tileId]: anchor }
+
+            // Renumber just the corner that changed. Everyone there, minus
+            // the tile being moved, with it put back at the position the
+            // drop pointed at — so a camera can sit above a broadcast
+            // instead of wherever the room happened to list it.
+            const neighbours = overlayTiles
+              .filter((t) => t.id !== tileId && anchors[t.id] === anchor)
+              .sort(
+                (a, b) =>
+                  (current.overlayOrder[a.id] ?? Number.MAX_SAFE_INTEGER) -
+                  (current.overlayOrder[b.id] ?? Number.MAX_SAFE_INTEGER)
+              )
+              .map((t) => t.id)
+
+            neighbours.splice(Math.min(index, neighbours.length), 0, tileId)
+
+            const overlayOrder = { ...current.overlayOrder }
+            neighbours.forEach((id, position) => {
+              overlayOrder[id] = position
+            })
+
+            updateSettings({ overlayAnchors: anchors, overlayOrder })
+          }}
+          onSize={(tileId, width) =>
+            updateSettings({
+              overlaySizes: { ...getSettings().overlaySizes, [tileId]: width }
+            })
+          }
+          onHide={(tileId) =>
+            updateSettings({
+              overlayHidden: [...new Set([...getSettings().overlayHidden, tileId])]
+            })
+          }
+          onListen={(peerId) => session.listenTo(peerId)}
+          onVolume={(peerId, volume) => session.setPeerAudio(peerId, { volume, muted: false })}
+          onOpacity={(overlayOpacity) => updateSettings({ overlayOpacity })}
+          onRestore={() => updateSettings({ overlayHidden: [] })}
+          exitHint={prettyShortcut(settings.overlayInteractKey)}
+        />
+      </OverlayPortal>
+
       {settings.railPosition === 'right' ? (
         <aside className="tm-side">
           {rail}
@@ -745,6 +912,7 @@ export function App(): JSX.Element {
 
       {settingsOpen && (
         <SettingsModal
+          takenShortcuts={takenShortcuts}
           version={snapshot.self ? appVersion : appVersion}
           onClose={() => setSettingsOpen(false)}
           onAdjustCamera={() => {
