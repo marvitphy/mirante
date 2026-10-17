@@ -172,6 +172,14 @@ export const IconLeave = (p: IconProps): JSX.Element => (
   </Icon>
 )
 
+/** Three faders at different heights — a picture of the panel it opens. */
+export const IconSliders = (p: IconProps): JSX.Element => (
+  <Icon {...p}>
+    <path d="M6 20v-6M6 10V4M12 20v-9M12 7V4M18 20v-3M18 13V4" />
+    <path d="M3.5 13h5M9.5 8.5h5M15.5 15.5h5" />
+  </Icon>
+)
+
 export const IconSettings = (p: IconProps): JSX.Element => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="3" />

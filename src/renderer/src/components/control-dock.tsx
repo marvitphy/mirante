@@ -1,6 +1,7 @@
-import type { JSX } from 'react'
+import { useState, type JSX } from 'react'
 
 import type { ScreenProfileName } from '../rtc/sdp'
+import { AppMixer } from './app-mixer'
 import {
   IconCamera,
   IconCameraOff,
@@ -8,7 +9,8 @@ import {
   IconMic,
   IconMicOff,
   IconScreen,
-  IconSettings
+  IconSettings,
+  IconSliders
 } from './icons'
 import { UpdateBadge } from './update-badge'
 
@@ -58,47 +60,54 @@ export function ControlDock({
   onSettings,
   layout
 }: ControlDockProps): JSX.Element {
+  const [mixerOpen, setMixerOpen] = useState(false)
+
   return (
     <div className={`tm-dock tm-dock--${layout}`}>
+      {/* One primary action, and it is the one the product exists for.
+          While live it stops being the loud thing — a broadcast already
+          announces itself everywhere else — and keeps only a tally dot.
+          Filling it red would put an alarm colour on a routine action and
+          put it in competition with the tally that actually means "on air". */}
       <button
         type="button"
-        className={`tm-btn tm-btn--primary${sharing ? ' is-on' : ''}`}
+        className={`tm-dock__primary${sharing ? ' is-live' : ''}`}
         onClick={onToggleScreen}
         title="Transmitir tela (Ctrl+Shift+S)"
       >
-        <IconScreen size={16} />
+        {sharing ? (
+          <span className="tm-dock__lamp" aria-hidden="true" />
+        ) : (
+          <IconScreen size={16} />
+        )}
         {sharing ? 'Parar transmissão' : 'Transmitir tela'}
       </button>
 
       {sharing && (
-        // Swapping the source is instant — the slot keeps its transceiver and
-        // only the track changes — so there is no reason to make someone stop
-        // and start again just to show a different window.
-        <button type="button" className="tm-btn" onClick={onChangeSource}>
-          Trocar fonte
-        </button>
+        // Two tools for the broadcast in progress, side by side and quieter
+        // than the action above them. Swapping the source is instant — the
+        // slot keeps its transceiver and only the track changes — so there
+        // is no reason to stop and start again to show a different window.
+        <div className="tm-dock__tools">
+          <button type="button" className="tm-dock__tool" onClick={onChangeSource}>
+            <IconScreen size={14} />
+            Fonte
+          </button>
+          <div className="tm-dock__mixer">
+            <button
+              type="button"
+              className={`tm-dock__tool${mixerOpen ? ' is-on' : ''}`}
+              onClick={() => setMixerOpen((open) => !open)}
+              aria-expanded={mixerOpen}
+              title="Equilibrar o som de cada aplicativo na transmissão"
+            >
+              <IconSliders size={14} />
+              Som
+            </button>
+            {mixerOpen && <AppMixer onClose={() => setMixerOpen(false)} />}
+          </div>
+        </div>
       )}
-
-      <div className="tm-dock__group">
-        <button
-          type="button"
-          className={`tm-pill${cameraOn ? ' is-on' : ''}`}
-          onClick={onToggleCamera}
-          aria-pressed={cameraOn}
-          title="Câmera (Ctrl+Shift+C)"
-        >
-          {cameraOn ? <IconCamera size={16} /> : <IconCameraOff size={16} />}
-        </button>
-        <button
-          type="button"
-          className={`tm-pill${micOn ? ' is-on' : ''}`}
-          onClick={onToggleMic}
-          aria-pressed={micOn}
-          title="Microfone (Ctrl+Shift+M)"
-        >
-          {micOn ? <IconMic size={16} /> : <IconMicOff size={16} />}
-        </button>
-      </div>
 
       {sharing && (
         <div className="tm-dock__profiles" role="radiogroup" aria-label="Qualidade da transmissão">
@@ -117,6 +126,33 @@ export function ControlDock({
           ))}
         </div>
       )}
+
+      {/* Your own devices are a different kind of thing from the broadcast
+          controls above, so a rule separates them instead of one more equal
+          gap. Square and small: they are two icons, and sizing them like
+          primary actions was giving the most routine toggles in the app the
+          visual weight of the most consequential one. */}
+      <div className="tm-dock__devices">
+        <button
+          type="button"
+          className={`tm-dock__device${cameraOn ? ' is-on' : ''}`}
+          onClick={onToggleCamera}
+          aria-pressed={cameraOn}
+          title="Câmera (Ctrl+Shift+C)"
+        >
+          {cameraOn ? <IconCamera size={16} /> : <IconCameraOff size={16} />}
+        </button>
+        <button
+          type="button"
+          className={`tm-dock__device${micOn ? ' is-on' : ''}`}
+          onClick={onToggleMic}
+          aria-pressed={micOn}
+          title="Microfone (Ctrl+Shift+M)"
+        >
+          {micOn ? <IconMic size={16} /> : <IconMicOff size={16} />}
+        </button>
+        <span className="tm-dock__devices-fill" />
+      </div>
 
       <div className="tm-dock__spacer" />
 

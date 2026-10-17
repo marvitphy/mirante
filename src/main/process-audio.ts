@@ -269,6 +269,27 @@ interface Source {
   /** Samples decoded but not yet mixed. */
   queue: Float32Array[]
   offset: number
+  /** Which application this is, so a fader can find it again. */
+  executable: string
+  /** What Windows calls it, which is what a person recognises. */
+  displayName: string
+}
+
+/**
+ * How loud each application is inside the broadcast.
+ *
+ * Keyed by executable, never by pid. A pid is not a thing anyone recognises
+ * and it does not survive the application itself: Chrome moves its audio
+ * between processes as tabs come and go, and a fader tied to a number would
+ * reset itself for no visible reason. "Spotify" is what somebody turns down.
+ *
+ * Outlives the captures on purpose — turn an app down, close it, open it
+ * again, and it comes back where you left it.
+ */
+const appGains = new Map<string, number>()
+
+function gainFor(executable: string): number {
+  return appGains.get(executable.toLowerCase()) ?? 1
 }
 
 /**
@@ -309,11 +330,30 @@ function available(source: Source): number {
 
 /** Pull up to `count` samples from one source, zero-filling what it lacks. */
 function drain(source: Source, out: Float32Array, count: number): void {
+  const gain = gainFor(source.executable)
+  if (gain === 0) {
+    // Silenced, but still consumed: leaving the samples in the queue would
+    // let the backlog grow until the safety valve started dropping chunks,
+    // and un-muting would then play a second of stale audio.
+    let skipped = 0
+    while (skipped < count && source.queue.length > 0) {
+      const chunk = source.queue[0]
+      const take = Math.min(count - skipped, chunk.length - source.offset)
+      skipped += take
+      source.offset += take
+      if (source.offset >= chunk.length) {
+        source.queue.shift()
+        source.offset = 0
+      }
+    }
+    return
+  }
+
   let written = 0
   while (written < count && source.queue.length > 0) {
     const chunk = source.queue[0]
     const take = Math.min(count - written, chunk.length - source.offset)
-    for (let i = 0; i < take; i++) out[written + i] += chunk[source.offset + i]
+    for (let i = 0; i < take; i++) out[written + i] += chunk[source.offset + i] * gain
     written += take
     source.offset += take
     if (source.offset >= chunk.length) {
@@ -362,6 +402,44 @@ function dropRedundantTrees(pids: number[]): number[] {
   return kept
 }
 
+/** What the renderer needs to draw a fader per application. */
+export interface MixerChannel {
+  executable: string
+  displayName: string
+  /** 0..2. Above 1 is a boost, which quiet games genuinely need. */
+  gain: number
+}
+
+/** One row per application currently in the broadcast, loudest name first. */
+export function mixerChannels(): MixerChannel[] {
+  const seen = new Map<string, MixerChannel>()
+  for (const source of sources.values()) {
+    const key = source.executable.toLowerCase()
+    if (seen.has(key)) continue
+    // The audio session's own name where Windows gives one — "Spotify",
+    // not "msedgewebview2". Falling back to the file name is better than
+    // nothing but it is the thing nobody recognises.
+    const name = source.displayName.trim()
+    seen.set(key, {
+      executable: source.executable,
+      displayName: name && name !== source.executable
+        ? name
+        : source.executable.replace(/\.exe$/i, ''),
+      gain: gainFor(source.executable)
+    })
+  }
+  return [...seen.values()].sort((a, b) => a.displayName.localeCompare(b.displayName))
+}
+
+export function setAppGain(executable: string, gain: number): void {
+  const key = executable.toLowerCase()
+  const clamped = Math.min(2, Math.max(0, gain))
+  // Exactly 1 is the default; not storing it keeps the map to the things
+  // somebody actually changed.
+  if (clamped === 1) appGains.delete(key)
+  else appGains.set(key, clamped)
+}
+
 /** The pids we want captured right now, resolved fresh every time. */
 function desiredPids(): number[] {
   if (!target) return []
@@ -383,10 +461,15 @@ function desiredPids(): number[] {
   return target.seedPid === null ? [] : [target.seedPid]
 }
 
-function openCapture(mod: NativeModule, pid: number): void {
+function openCapture(
+  mod: NativeModule,
+  pid: number,
+  executable: string,
+  displayName: string
+): void {
   try {
     const capture = new mod.ProcessAudioCapture(pid, 'IncludeTree')
-    const source: Source = { capture, queue: [], offset: 0 }
+    const source: Source = { capture, queue: [], offset: 0, executable, displayName }
     capture.start((chunk) => {
       source.queue.push(
         new Float32Array(
@@ -417,17 +500,31 @@ function closeCapture(pid: number): void {
 }
 
 /** Bring the open captures in line with what is playing right now. */
-function rescan(): void {
+function rescan(window?: BrowserWindow): void {
   const mod = loadNative()
   if (!mod) return
 
+  const playing = listAudioApps()
+  const apps = new Map(playing.map((app) => [app.pid, app]))
   const wanted = new Set(desiredPids())
+  const before = sources.size
 
   for (const pid of [...sources.keys()]) {
     if (!wanted.has(pid)) closeCapture(pid)
   }
   for (const pid of wanted) {
-    if (!sources.has(pid)) openCapture(mod, pid)
+    if (!sources.has(pid)) {
+      const app = apps.get(pid)
+      const executable = app?.executable ?? executableForPid(pid) ?? `pid ${pid}`
+      openCapture(mod, pid, executable, app?.displayName ?? executable)
+    }
+  }
+
+  // The set of applications changes on its own as things start and stop
+  // making noise, so the faders cannot be a snapshot taken when the share
+  // opened.
+  if (window && !window.isDestroyed() && sources.size !== before) {
+    window.webContents.send('audio:mixer', mixerChannels())
   }
 }
 
@@ -469,8 +566,8 @@ export function startProcessAudio(
     target = { kind: 'everything', executable: null, seedPid: null }
   }
 
-  rescan()
-  rescanTimer = setInterval(rescan, RESCAN_INTERVAL_MS)
+  rescan(window)
+  rescanTimer = setInterval(() => rescan(window), RESCAN_INTERVAL_MS)
 
   // Forward everything that has arrived, not a fixed slice.
   //
@@ -484,16 +581,39 @@ export function startProcessAudio(
   mixTimer = setInterval(() => {
     if (window.isDestroyed()) return
 
-    let count = 0
-    for (const source of sources.values()) count = Math.max(count, available(source))
-    if (count <= 0) return
+    // Take only what EVERY contributing capture already has.
+    //
+    // This used to take the maximum and let `drain` zero-fill whatever a
+    // source was short by — which is the same as splicing silence into that
+    // app's audio and then playing its real samples late, over and over.
+    // With a single capture the maximum IS its own backlog, so nothing is
+    // ever zero-filled and it sounds perfect; with several, every capture
+    // that is a few samples behind the fastest one gets shredded. That is
+    // exactly the shape of the complaint: a window shares cleanly and the
+    // whole screen crackles.
+    //
+    // Each capture is its own WASAPI client with its own event loop, so they
+    // never arrive in lockstep. The pace is set by the slowest one that has
+    // something to give.
+    const ready: Source[] = []
+    let count = Number.MAX_SAFE_INTEGER
+    for (const source of sources.values()) {
+      const have = available(source)
+      // A capture with less than a frame ready is not "behind", it is idle:
+      // its app is simply not making noise. Waiting for it would stall
+      // everyone else for as long as that app stays quiet.
+      if (have < FRAME_10MS) continue
+      ready.push(source)
+      if (have < count) count = have
+    }
+    if (ready.length === 0) return
 
     count = Math.min(count, MAX_BURST)
     count -= count % CHANNELS
     if (count === 0) return
 
     const mixed = new Float32Array(count)
-    for (const source of sources.values()) drain(source, mixed, count)
+    for (const source of ready) drain(source, mixed, count)
 
     // Soften the top instead of shearing it off.
     //
@@ -535,5 +655,10 @@ export function registerProcessAudio(window: BrowserWindow): void {
   ipcMain.handle('audio:start', () => startProcessAudio(window, armedAudioPlan()))
   ipcMain.handle('audio:stop', () => {
     stopProcessAudio()
+  })
+  ipcMain.handle('audio:mixer', () => mixerChannels())
+  ipcMain.handle('audio:set-gain', (_event, executable: string, gain: number) => {
+    setAppGain(executable, gain)
+    return mixerChannels()
   })
 }

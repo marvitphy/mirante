@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 import type { CaptureChoice, CaptureSource } from '../main/capture'
-import type { AudioApp, AudioCapability } from '../main/process-audio'
+import type { AudioApp, AudioCapability , MixerChannel } from '../main/process-audio'
 import type { UpdateState } from '../main/updater'
 
 export interface WindowState {
@@ -53,6 +53,19 @@ export interface MiranteApi {
   hotkeys: {
     on: (key: HotkeyChannel, handler: () => void) => () => void
   }
+  /**
+   * The live mix of your broadcast, one fader per application.
+   *
+   * Only meaningful while sharing with sound. The set of applications moves
+   * on its own as things start and stop making noise, which is why there is
+   * a subscription and not just a getter.
+   */
+  mixer: {
+    channels: () => Promise<MixerChannel[]>
+    setGain: (executable: string, gain: number) => Promise<MixerChannel[]>
+    onChannels: (handler: (channels: MixerChannel[]) => void) => () => void
+  }
+
   /**
    * The overlay sheet: a transparent, always-on-top window over the game.
    *
@@ -123,6 +136,14 @@ const api: MiranteApi = {
   hotkeys: {
     on: (key, handler) => subscribe(`hotkey:${key}`, () => handler())
   },
+  mixer: {
+    channels: () => ipcRenderer.invoke('audio:mixer') as Promise<MixerChannel[]>,
+    setGain: (executable, gain) =>
+      ipcRenderer.invoke('audio:set-gain', executable, gain) as Promise<MixerChannel[]>,
+    onChannels: (handler) =>
+      subscribe('audio:mixer', (channels) => handler(channels as MixerChannel[]))
+  },
+
   overlay: {
     show: (show: boolean) => ipcRenderer.send('overlay:show', show),
     setInteractive: (on: boolean) => ipcRenderer.send('overlay:interactive', on),
