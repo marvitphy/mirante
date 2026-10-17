@@ -180,6 +180,13 @@ export const IconSliders = (p: IconProps): JSX.Element => (
   </Icon>
 )
 
+/** A small chevron: there is a choice behind this control. */
+export const IconCaret = (p: IconProps): JSX.Element => (
+  <Icon {...p}>
+    <path d="M7 10l5 5 5-5" />
+  </Icon>
+)
+
 export const IconSettings = (p: IconProps): JSX.Element => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="3" />

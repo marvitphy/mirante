@@ -83,9 +83,18 @@
   position: relative;
   width: 168px;
   aspect-ratio: 16 / 9;
-  overflow: hidden;
   display: grid;
   place-items: center;
+}
+
+/* The picture, and the only thing that is clipped. Controls and the name
+   live on the tile outside this, so an edge never eats them. */
+.tm-ov__media {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
   background: hsl(258 45% 3% / 0.92);
   border: 1px solid var(--rule);
   box-shadow: var(--shadow-plate);
@@ -96,8 +105,7 @@
 .tm-ov__tile.is-grabbable {
   cursor: grab;
 }
-.tm-ov__tile.is-dragging {
-  cursor: grabbing;
+.tm-ov__tile.is-dragging .tm-ov__media {
   border-color: var(--accent);
   box-shadow: var(--shadow-pop);
 }
@@ -136,8 +144,6 @@
   place-items: center;
   width: 210px;
   height: 128px;
-  padding: var(--s-2);
-  text-align: center;
   border: 1px dashed hsl(from var(--accent) h s l / 0.35);
   background: hsl(258 45% 2% / 0.4);
   color: var(--text-muted);
@@ -226,9 +232,11 @@
  */
 .tm-ov__tile.is-held {
   transform: translate(-50%, -50%) scale(1.04);
+  cursor: grabbing;
+}
+.tm-ov__tile.is-held .tm-ov__media {
   border-color: var(--accent);
   box-shadow: var(--shadow-pop);
-  cursor: grabbing;
 }
 .tm-ov__tile {
   transition:
@@ -238,19 +246,7 @@
 
 /* --- per-tile controls --------------------------------------------------- */
 
-.tm-ov__tools {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  display: flex;
-  gap: 3px;
-  opacity: 0;
-  transition: opacity 120ms var(--ease-out);
-}
-.tm-ov__tile:hover .tm-ov__tools {
-  opacity: 1;
-}
-
+.tm-ov__tile:hover 
 .tm-ov__tool {
   display: grid;
   place-items: center;
@@ -309,42 +305,6 @@
   border-right: 2px solid var(--accent);
 }
 
-.tm-ov__grip--tl {
-  right: 0;
-  bottom: 0;
-  cursor: nwse-resize;
-}
-.tm-ov__grip--tr {
-  left: 0;
-  bottom: 0;
-  cursor: nesw-resize;
-}
-.tm-ov__grip--tr::after,
-.tm-ov__grip--br::after {
-  border-right: 0;
-  border-left: 2px solid var(--accent);
-}
-.tm-ov__grip--bl {
-  right: 0;
-  top: 0;
-  cursor: nesw-resize;
-}
-.tm-ov__grip--bc {
-  right: 0;
-  top: 0;
-  cursor: nesw-resize;
-}
-.tm-ov__grip--bl::after,
-.tm-ov__grip--bc::after,
-.tm-ov__grip--br::after {
-  border-bottom: 0;
-  border-top: 2px solid var(--accent);
-}
-.tm-ov__grip--br {
-  left: 0;
-  top: 0;
-  cursor: nwse-resize;
-}
 
 /* --- drop targets that show the result ----------------------------------- */
 
@@ -469,23 +429,34 @@
  * decide, which is why a camera could never be placed above a broadcast
  * sharing the same one.
  */
+/*
+ * A short centred bar, never a stretched one.
+ *
+ * `align-self: stretch` made it as wide as the widest tile in the dock, so
+ * dropping a face next to a broadcast drew a 288px rule under a 168px
+ * circle — which reads as a glitch rather than as "it goes here". A fixed
+ * mark says the same thing and belongs to nothing but itself.
+ */
 .tm-ov__caret {
   flex: 0 0 auto;
-  align-self: stretch;
+  align-self: center;
+  border-radius: var(--r-full);
   background: var(--accent);
   box-shadow: 0 0 10px hsl(from var(--accent) h s l / 0.6);
   animation: tm-caret 140ms var(--ease-out);
 }
 /* Corners stack downward, so the marker is a horizontal rule between tiles;
    the bottom centre is a row, so there it stands upright. */
+/* Thickness here; LENGTH is measured from the tiles it sits between, since
+   a fixed one belongs to neither of them once they differ in size. */
 .tm-ov__dock--tl .tm-ov__caret,
 .tm-ov__dock--tr .tm-ov__caret,
 .tm-ov__dock--bl .tm-ov__caret,
 .tm-ov__dock--br .tm-ov__caret {
-  height: 2px;
+  height: 3px;
 }
 .tm-ov__dock--bc .tm-ov__caret {
-  width: 2px;
+  width: 3px;
 }
 
 @keyframes tm-caret {
@@ -500,3 +471,231 @@
     animation: none;
   }
 }
+
+/* --- faces as circles ---------------------------------------------------- */
+/*
+ * A 16:9 tile over a game is mostly wall and shoulder, and it reads as a
+ * window sitting on the picture. A circle reads as a person and covers a
+ * fraction of the pixels for the same face.
+ *
+ * Only faces. A broadcast stays a rectangle, because there the corners are
+ * the content.
+ */
+.tm-ov__tile.is-round {
+  aspect-ratio: 1 / 1;
+}
+.tm-ov__tile.is-round .tm-ov__media {
+  border-radius: var(--r-full);
+  /* The ring is the whole shape now, so it earns a little more presence. */
+  border-width: 2px;
+  background: hsl(258 45% 3% / 0.55);
+}
+
+.tm-ov__tile.is-round .tm-ov__video {
+  object-fit: cover;
+}
+
+/* The gradient plate reads as a cut across a circle. The name goes under it
+   instead, centred, as a small chip on its own. */
+/* INSIDE the circle, not hanging below it.
+   Below was the first attempt, and the tile clips its own overflow to make
+   the circle in the first place — so the chip came out sliced in half. */
+.tm-ov__tile.is-round .tm-ov__name {
+  left: 50%;
+  right: auto;
+  /*
+   * Height and width are one decision, because a circle gets narrower
+   * towards the bottom and the chip is clipped by the same `overflow`
+   * that makes the circle.
+   *
+   * The chord at height h of a circle of diameter d is
+   * 2·sqrt(r² − (r−h)²). At 8% up it is only 54% of the diameter, so a
+   * chip allowed 74% had its ends cut off by the curve. At 15% up the
+   * chord is 69%, which leaves 60% comfortable.
+   */
+  bottom: 15%;
+  transform: translateX(-50%);
+  width: auto;
+  max-width: 60%;
+  padding: 1px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: hsl(258 45% 2% / 0.82);
+  border-radius: var(--r-full);
+  font-size: var(--text-nano);
+  text-align: center;
+}
+
+/* Controls move inward: on a circle the bounding box corners are empty, and
+   a button floating in that gap looks detached from the thing it acts on. */
+/*
+ * On the rim, at the diagonal.
+ *
+ * The corner of the bounding box is outside a circle entirely, so a button
+ * placed there floats with nothing under it. The 45° point of the rim sits
+ * at 14.6% in from each side — put the control there and it reads as
+ * attached to the thing it acts on.
+ */
+/* The SAME inset as the tools opposite them.
+   At 10% against the tools' 6% the handle sat seven pixels further in on a
+   168px tile — close enough to look like an accident and far enough to see.
+   Two controls on the same rim have to share one offset. */
+.tm-ov__tile.is-round .tm-ov__grip--tl,
+.tm-ov__tile.is-round .tm-ov__grip--bl,
+.tm-ov__tile.is-round .tm-ov__tile.is-round .tm-ov__grip--tr,
+.tm-ov__tile.is-round .tm-ov__tile.is-round .tm-ov__grip--tl,
+.tm-ov__tile.is-round .tm-ov__tile.is-round .tm-ov__grip--bl,
+.tm-ov__tile.is-round .tm-ov__grip--br,
+.tm-ov__tile.is-round 
+/* A circle in the air keeps its shape rather than squashing into the
+   translate used for rectangular tiles. */
+.tm-ov__tile.is-round.is-held {
+  box-shadow: var(--shadow-pop), 0 0 0 3px var(--accent-wash);
+}
+
+
+
+
+/* --- controls on a tile -------------------------------------------------
+ *
+ * Two controls, four corners, one rule: the resize handle takes the corner
+ * facing the middle of the screen, so dragging grows the tile into empty
+ * space, and the buttons take the corner diagonally opposite it. Deriving
+ * one position from the other is what makes a collision impossible — pinned
+ * independently, the handle and the close button landed on top of each
+ * other in the bottom-left corner, where both wanted the top right.
+ *
+ * Both sit ON the rim at the same inset, so neither looks more attached
+ * than the other.
+ */
+
+.tm-ov__grip {
+  position: absolute;
+  inset: auto;
+}
+.tm-ov__grip--tl { top: 2px; left: 2px; cursor: nwse-resize; }
+.tm-ov__grip--tr { top: 2px; right: 2px; cursor: nesw-resize; }
+.tm-ov__grip--bl { bottom: 2px; left: 2px; cursor: nesw-resize; }
+.tm-ov__grip--br { bottom: 2px; right: 2px; cursor: nwse-resize; }
+
+/* The arrow points the way the drag goes: outward, along its own diagonal.
+   A single fixed rotation had it pointing right while sitting on the left,
+   which is an instruction to do the opposite of what happens. */
+.tm-ov__grip::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border: 0;
+  border-bottom: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+}
+.tm-ov__grip--br::after { transform: rotate(0deg); }
+.tm-ov__grip--bl::after { transform: rotate(90deg); }
+.tm-ov__grip--tl::after { transform: rotate(180deg); }
+.tm-ov__grip--tr::after { transform: rotate(270deg); }
+
+/* On a circle the box corner is outside the shape entirely, so both move
+   in to the 45° point of the rim — the same inset for each. */
+.tm-ov__tile.is-round .tm-ov__tile.is-round .tm-ov__tile.is-round .tm-ov__tile.is-round 
+.tm-ov__tile.is-round .tm-ov__grip {
+  width: 18px;
+  height: 18px;
+  background: hsl(258 45% 2% / 0.9);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-full);
+}
+.tm-ov__tile.is-round .tm-ov__grip::after {
+  inset: 5px;
+  transform-origin: center;
+}
+.tm-ov__tile.is-round .tm-ov__grip--tl { top: 7%; left: 7%; }
+.tm-ov__tile.is-round .tm-ov__grip--tr { top: 7%; right: 7%; }
+.tm-ov__tile.is-round .tm-ov__grip--bl { bottom: 7%; left: 7%; }
+.tm-ov__tile.is-round .tm-ov__grip--br { bottom: 7%; right: 7%; }
+
+/* On a circle the controls are circles too. Same rim, same inset, and then
+   one of them square reads as something left unfinished rather than as a
+   distinction. */
+.tm-ov__tile.is-round .tm-ov__tool {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-full);
+}
+
+
+/* --- the controls, in the middle ----------------------------------------
+ *
+ * Hover dims the tile and the buttons appear at its centre.
+ *
+ * They used to be pinned to a corner, and every corner was a special case:
+ * on a circle the box corner falls outside the shape, so they needed to be
+ * walked back to the rim; on the rim they collided with the resize handle,
+ * which wanted a corner of its own; avoiding the collision meant deriving
+ * one corner from the other and keeping four rotations in step. All of that
+ * to place a close button.
+ *
+ * The middle of a tile is the same place in every corner, at every size,
+ * for a circle and a rectangle alike. The scrim is what makes it legible
+ * over a bright picture, and it doubles as the hover state.
+ */
+.tm-ov__tools {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  opacity: 0;
+  background: hsl(258 45% 1% / 0.62);
+  transition: opacity 120ms var(--ease-out);
+  /*
+   * The scrim is paint, not a surface.
+   *
+   * Covering the tile edge to edge put an invisible layer over the whole
+   * thing, and an invisible layer still swallows the pointer: every attempt
+   * to drag a tile landed on this instead and died here. Only the buttons
+   * take the mouse; everywhere else the press reaches the tile and becomes
+   * a drag.
+   */
+  pointer-events: none;
+}
+.tm-ov__tools > * {
+  pointer-events: auto;
+}
+.tm-ov__tile.is-round .tm-ov__tools {
+  border-radius: var(--r-full);
+}
+.tm-ov__tile:hover .tm-ov__tools,
+.tm-ov__tools:focus-within {
+  opacity: 1;
+}
+
+.tm-ov__tool {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-full);
+  color: var(--text-primary);
+  background: hsl(258 45% 2% / 0.7);
+  border: 1px solid var(--rule);
+}
+.tm-ov__tool:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* The handle keeps a corner, because resizing is a corner gesture — but on
+   a circle it becomes a disc on the rim, since a right-angle bracket laid
+   over a curve never settles. */
+.tm-ov__tile.is-round .tm-ov__grip {
+  width: 18px;
+  height: 18px;
+  background: hsl(258 45% 2% / 0.9);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-full);
+}
+.tm-ov__tile.is-round .tm-ov__grip::after {
+  inset: 5px;
+}
+.tm-ov__tile.is-round .tm-ov__grip--tl { top: 7%; left: 7%; }
+.tm-ov__tile.is-round .tm-ov__grip--tr { top: 7%; right: 7%; }
+.tm-ov__tile.is-round .tm-ov__grip--bl { bottom: 7%; left: 7%; }
+.tm-ov__tile.is-round .tm-ov__grip--br { bottom: 7%; right: 7%; }

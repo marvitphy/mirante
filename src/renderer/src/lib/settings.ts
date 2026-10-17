@@ -72,6 +72,15 @@ export interface Settings {
   overlayOrder: Record<string, number>
   /** Tiles taken off the sheet. They stay in the Mirante window. */
   overlayHidden: string[]
+  /**
+   * Faces as circles on the overlay.
+   *
+   * A 16:9 tile over a game is mostly wall and shoulder, and it reads as a
+   * window sitting on top of the picture. A circle reads as a person and
+   * covers a fraction of the pixels for the same face. Broadcasts stay
+   * rectangular — there the corners are the content.
+   */
+  overlayRoundCameras: boolean
 }
 
 const STORE_KEY = 'mirante.settings'
@@ -95,7 +104,8 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayAnchors: {},
   overlaySizes: {},
   overlayOrder: {},
-  overlayHidden: []
+  overlayHidden: [],
+  overlayRoundCameras: true
 }
 
 function load(): Settings {

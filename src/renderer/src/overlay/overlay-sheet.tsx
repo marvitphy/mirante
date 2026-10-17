@@ -46,10 +46,13 @@ const MAX_WIDTH = 520
 const DEFAULT_FACE = 168
 const DEFAULT_WIDE = 288
 
-/** Which corner of the tile the resize handle sits on, per anchor. */
+/**
+ * Which corner the resize handle sits on, per anchor.
+ *
+ * Always the corner pointing at the middle of the screen, so dragging grows
+ * the tile into empty space rather than off the edge it is pinned to.
+ */
 const HANDLE_CORNER: Record<Anchor, { x: 1 | -1; y: 1 | -1 }> = {
-  // Always the corner pointing at the middle of the screen, so the tile
-  // grows into empty space rather than off the edge it is pinned to.
   tl: { x: 1, y: 1 },
   tr: { x: -1, y: 1 },
   bl: { x: 1, y: -1 },
@@ -57,13 +60,16 @@ const HANDLE_CORNER: Record<Anchor, { x: 1 | -1; y: 1 | -1 }> = {
   bc: { x: 1, y: -1 }
 }
 
-const ANCHOR_LABELS: Record<Anchor, string> = {
-  tl: 'superior esquerdo',
-  tr: 'superior direito',
-  bl: 'inferior esquerdo',
-  br: 'inferior direito',
-  bc: 'embaixo, ao centro'
+/** The corner name the handle lands on, for styling. */
+const HANDLE_AT: Record<Anchor, 'tl' | 'tr' | 'bl' | 'br'> = {
+  tl: 'br',
+  tr: 'bl',
+  bl: 'tr',
+  br: 'tl',
+  bc: 'tr'
 }
+
+
 
 /** Where each anchor's centre sits, as a fraction of the sheet. */
 const ANCHOR_POINTS: Record<Anchor, { x: number; y: number }> = {
@@ -118,6 +124,8 @@ interface OverlaySheetProps {
   opacity: number
   /** Whose broadcast audio is playing, if any. */
   listening: string | null
+  /** Show faces as circles. Broadcasts are always rectangles. */
+  round: boolean
   /** Dropped into a corner, at a position within it. */
   onAnchor: (tileId: string, anchor: Anchor, index: number) => void
   onSize: (tileId: string, width: number) => void
@@ -140,6 +148,7 @@ export function OverlaySheet({
   interactive,
   opacity,
   listening,
+  round,
   onAnchor,
   onSize,
   onHide,
@@ -246,6 +255,25 @@ export function OverlaySheet({
     },
     [slots]
   )
+
+  /**
+   * The mark between two tiles, as wide as the tiles it separates.
+   *
+   * A fixed length looked arbitrary the moment the tiles stopped being the
+   * same size — a 56px bar between a large broadcast and a small face
+   * belongs to neither of them. Measuring the neighbours makes it read as
+   * the seam between those two rather than as a loose dash.
+   */
+  const caretSize = (anchor: Anchor, index: number): { width?: number; height?: number } => {
+    const rects = slots[anchor] ?? []
+    const near = [rects[index - 1], rects[index]].filter(Boolean) as DOMRect[]
+    if (near.length === 0) return {}
+    const span = Math.max(...near.map((r) => (anchor === 'bc' ? r.height : r.width)))
+    // Not the full width: a seam reaching the very edges reads as a divider
+    // between sections rather than as a place to drop something.
+    const length = Math.round(span * 0.6)
+    return anchor === 'bc' ? { height: length } : { width: length }
+  }
 
   /** The size a zone should be to hold what is there plus what is coming. */
   const zoneSize = (anchor: Anchor): { width: number; height: number } => {
@@ -365,9 +393,7 @@ export function OverlaySheet({
               height: fit && target === anchor ? fit.height : undefined
             }}
             aria-hidden="true"
-          >
-            <span>{ANCHOR_LABELS[anchor]}</span>
-          </div>
+          />
         )
       })}
 
@@ -397,7 +423,13 @@ export function OverlaySheet({
           >
             {here.map((tile, index) => (
               <Fragment key={tile.id}>
-                {insertAt === index && <span className="tm-ov__caret" aria-hidden="true" />}
+                {insertAt === index && (
+                  <span
+                    className="tm-ov__caret"
+                    style={caretSize(anchor, index)}
+                    aria-hidden="true"
+                  />
+                )}
                 <Tile
                 key={tile.id}
                 tile={tile}
@@ -405,6 +437,7 @@ export function OverlaySheet({
                 register={register}
                 flipKey={`${tile.id}:${anchors[tile.id] ?? ''}`}
                 anchor={anchor}
+                round={round && !tile.wide}
                 drag={dragging === tile.id ? drag : null}
                 interactive={interactive}
                 hearing={tile.peerId !== undefined && listening === tile.peerId}
@@ -421,7 +454,11 @@ export function OverlaySheet({
               </Fragment>
             ))}
             {insertAt !== null && insertAt >= here.length && (
-              <span className="tm-ov__caret" aria-hidden="true" />
+              <span
+                className="tm-ov__caret"
+                style={caretSize(anchor, here.length)}
+                aria-hidden="true"
+              />
             )}
           </div>
         )
@@ -434,6 +471,7 @@ function Tile({
   tile,
   width,
   anchor,
+  round,
   register,
   flipKey,
   drag,
@@ -448,6 +486,7 @@ function Tile({
   tile: OverlayTile
   width: number
   anchor: Anchor
+  round: boolean
   register: (key: string, node: HTMLElement | null) => void
   flipKey: string
   drag: { x: number; y: number; dx: number; dy: number } | null
@@ -528,24 +567,32 @@ function Tile({
         tileRef.current = node
         register(flipKey, node)
       }}
-      className={`tm-ov__tile${tile.wide ? ' is-wide' : ''}${drag ? ' is-held' : ''}${
-        interactive ? ' is-grabbable' : ''
-      }`}
+      className={`tm-ov__tile${tile.wide ? ' is-wide' : ''}${round ? ' is-round' : ''}${
+        drag ? ' is-held' : ''
+      }${interactive ? ' is-grabbable' : ''}`}
       style={{ width, ...floating }}
       onPointerDown={onPointerDown}
       title={interactive ? `Arraste ${tile.name} para um canto` : tile.name}
     >
-      {tile.stream ? (
-        <video
-          ref={videoRef}
-          className={`tm-ov__video${tile.mirrored ? ' is-mirrored' : ''}`}
-          autoPlay
-          playsInline
-          muted
-        />
-      ) : (
-        <Avatar name={tile.name} hue={tile.hue} />
-      )}
+      {/* The picture is clipped, the tile is not.
+          Putting `overflow: hidden` on the tile is what made the circle, and
+          also what cut the close button and the name chip in half: both sit
+          near an edge, and near an edge is exactly where a circle has no
+          room. Clipping one level in gives the shape back without taking
+          the corners away from everything else. */}
+      <span className="tm-ov__media">
+        {tile.stream ? (
+          <video
+            ref={videoRef}
+            className={`tm-ov__video${tile.mirrored ? ' is-mirrored' : ''}`}
+            autoPlay
+            playsInline
+            muted
+          />
+        ) : (
+          <Avatar name={tile.name} hue={tile.hue} />
+        )}
+      </span>
 
       <span className="tm-ov__name">{tile.mine ? 'você' : tile.name}</span>
 
@@ -553,7 +600,13 @@ function Tile({
           would be decoration over someone's game. */}
       {interactive && !drag && (
         <>
-          <div className="tm-ov__tools" onPointerDown={(event) => event.stopPropagation()}>
+          <div
+            className="tm-ov__tools"
+            // Only the buttons inside take the pointer — the scrim itself is
+            // transparent to it — so this stops a press on a BUTTON from
+            // also starting a drag, and nothing else.
+            onPointerDown={(event) => event.stopPropagation()}
+          >
             {tile.peerId !== undefined && (
               <button
                 type="button"
@@ -588,7 +641,7 @@ function Tile({
           )}
 
           <span
-            className={`tm-ov__grip tm-ov__grip--${anchor}`}
+            className={`tm-ov__grip tm-ov__grip--${HANDLE_AT[anchor]}`}
             onPointerDown={resize}
             title="Arraste pra redimensionar"
           />

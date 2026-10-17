@@ -32,6 +32,32 @@ interface SourcePickerProps {
 type TabId = 'screens' | 'windows'
 
 export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps): JSX.Element {
+  /**
+   * Pictures arrive after the grid does.
+   *
+   * Building them means capturing a frame of every window, which Chromium
+   * does in the main process: measured at roughly 500 ms against 40 ms for
+   * the names alone. Waiting for them before showing anything put that half
+   * second between the click and any response at all — felt as the whole
+   * machine going heavy, because a blocked main process freezes the app.
+   *
+   * So the grid draws immediately from names, and the frames fill in.
+   */
+  const [shots, setShots] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let live = true
+    void window.mirante.capture
+      .thumbnails()
+      .then((map) => {
+        if (live) setShots(map)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
+
   const screens = useMemo(() => sources.filter((s) => s.kind === 'screen'), [sources])
   const windows = useMemo(() => sources.filter((s) => s.kind === 'window'), [sources])
 
@@ -111,6 +137,7 @@ export function SourcePicker({ sources, onConfirm, onCancel }: SourcePickerProps
               {visible.map((source) => (
                 <SourceTile
                   key={source.id}
+                  thumbnail={shots[source.id] ?? source.thumbnail}
                   source={source}
                   selected={selected === source.id}
                   onSelect={() => setSelected(source.id)}
@@ -191,11 +218,14 @@ function Tab({
 
 function SourceTile({
   source,
+  thumbnail,
   selected,
   onSelect,
   onCommit
 }: {
   source: CaptureSource
+  /** Empty until the frames arrive. */
+  thumbnail: string
   selected: boolean
   onSelect: () => void
   onCommit: () => void
@@ -209,10 +239,11 @@ function SourceTile({
       title={source.name}
     >
       <span className="tm-src__shot">
-        {source.thumbnail ? (
-          <img src={source.thumbnail} alt="" draggable={false} />
+        {thumbnail ? (
+          <img src={thumbnail} alt="" draggable={false} />
         ) : (
-          <span className="tm-src__void" aria-hidden="true" />
+          // Not an error state: the frame is simply still being taken.
+          <span className="tm-src__void is-waiting" aria-hidden="true" />
         )}
         <span className="tm-src__ticks" aria-hidden="true" />
       </span>

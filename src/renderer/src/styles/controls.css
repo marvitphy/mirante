@@ -951,46 +951,120 @@
   width: min(760px, 100%);
 }
 
+/*
+ * Choosing a camera.
+ *
+ * Two failures, both structural rather than decorative.
+ *
+ * The list asked a question it could not answer. "Iriun Webcam #2" against
+ * "#3" means nothing to anybody, including us — the label is everything the
+ * browser hands over — so the picture leads and hovering a row previews
+ * that camera without choosing it.
+ *
+ * And the halves did not relate: six short rows floating as loose text
+ * beside a tall preview, leaving the bottom-left quarter of the dialog
+ * empty. The list is now a panel with its own header that fills its column,
+ * which is what makes the two sides read as one layout instead of two
+ * things placed near each other.
+ */
 .tm-campick {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   gap: var(--s-5);
-  padding: var(--s-5) var(--s-6);
+  padding: var(--s-5) var(--s-5) var(--s-5);
+  align-items: stretch;
+}
+
+/* --- the list, as a panel ----------------------------------------------- */
+
+.tm-campick__panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--rule);
+}
+
+.tm-campick__panelhead {
+  flex: 0 0 auto;
+  padding: var(--s-3) var(--s-3) var(--s-2);
+  border-bottom: 1px solid var(--rule-faint);
+  color: var(--text-muted);
 }
 
 .tm-campick__list {
   display: flex;
   flex-direction: column;
-  gap: var(--s-2);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-2) 0;
 }
 
 .tm-campick__item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  min-height: 42px;
-  padding: var(--s-2) var(--s-3);
-  border: 1px solid var(--rule-faint);
-  background: var(--surface-1);
+  min-height: 34px;
+  padding: 0 var(--s-3) 0 0;
+  border: 0;
+  background: transparent;
   text-align: left;
-  font-size: var(--text-micro);
+  font-size: var(--text-caption);
   color: var(--text-secondary);
-  transition: border-color var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
 }
 .tm-campick__item:hover {
-  border-color: var(--rule);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/* A bar, not a box. One answer is expected, and a square beside every row
+   says the opposite before anybody reads a word. */
+.tm-campick__mark {
+  flex: 0 0 auto;
+  width: 2px;
+  align-self: stretch;
+  background: transparent;
+  transition: background var(--t-fast) var(--ease-out);
 }
 .tm-campick__item.is-on {
-  border-color: var(--accent);
   background: var(--accent-wash);
   color: var(--text-primary);
 }
-.tm-campick__item.is-on .tm-aopt__dot {
-  border-color: var(--accent);
+.tm-campick__item.is-on .tm-campick__mark {
   background: var(--accent);
 }
+/* Being looked at, not chosen. */
+.tm-campick__item.is-peeking {
+  background: var(--surface-2);
+}
+.tm-campick__item.is-peeking .tm-campick__mark {
+  background: var(--text-tertiary);
+}
+
+.tm-campick__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: var(--s-2);
+}
+
+.tm-campick__empty {
+  margin: var(--s-3);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* --- the picture, which is the point ------------------------------------ */
 
 .tm-campick__preview {
+  position: relative;
   display: grid;
   place-items: center;
   aspect-ratio: 16 / 9;
@@ -1004,10 +1078,46 @@
   object-fit: cover;
 }
 /* Mirrored: you are looking at yourself, and a mirror is what people expect
-   of their own image. Not applied with a background on — the feed has already
-   flipped you and left the picture the right way round. */
+   of their own image. Not applied with a background on — the feed has
+   already flipped you and left the picture the right way round. */
 .tm-campick__preview video.is-mirrored {
   transform: scaleX(-1);
+}
+
+/* Which camera is in the picture. Four devices named almost the same thing
+   make a preview without a caption only move the confusion. */
+.tm-campick__tag {
+  position: absolute;
+  left: var(--s-3);
+  bottom: var(--s-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: calc(100% - var(--s-6));
+  padding: 3px var(--s-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: hsl(258 45% 2% / 0.88);
+  border: 1px solid var(--rule);
+  font-size: var(--text-nano);
+  color: var(--text-primary);
+}
+
+.tm-campick__lamp {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+
+.tm-campick__peek {
+  font-style: normal;
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .tm-campick__side {
@@ -1489,4 +1599,97 @@
   .tm-mixer {
     animation: none;
   }
+}
+
+/* On or off, and which one: two questions, one control.
+   The caret is deliberately small — picking a camera is rare next to
+   turning it on, and sizing them alike would say otherwise. */
+.tm-dock__device-pair {
+  display: flex;
+  flex: 0 0 auto;
+}
+.tm-dock__device-pair .tm-dock__device {
+  border-right: 0;
+}
+
+.tm-dock__device-more {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: var(--dock-row);
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--t-pop) var(--ease-out),
+    border-color var(--t-pop) var(--ease-out);
+}
+.tm-dock__device-more:hover {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+
+/* A frame still being taken, which is not the same as a window with no
+   picture. It pulses, so the grid reads as filling in rather than broken. */
+.tm-src__void.is-waiting {
+  animation: tm-waiting 1.1s var(--ease-out) infinite;
+}
+
+@keyframes tm-waiting {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-src__void.is-waiting {
+    animation: none;
+  }
+}
+
+/* The footer of the camera sheet: a reassurance, read once. Sentence case
+   rather than the tracked uppercase the labels use — shouting it makes the
+   footer compete with the choice it is reassuring you about. */
+.tm-campick__note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+
+/* The background group, given the same head-and-rule the settings sheet
+   uses. The bare word floated like a stray caption. */
+.tm-campick__bghead {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+.tm-campick__bgrule {
+  flex: 1;
+  height: 1px;
+  background: var(--rule-faint);
+}
+
+/* Two equal tiles across the full width of the preview above them, so the
+   column reads as one object instead of a picture with some small squares
+   loose underneath. */
+.tm-campick__bgopts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+}
+.tm-bgopt {
+  width: 100%;
+}
+
+/* The background is the secondary choice on this sheet and must not ask
+   for the attention the camera does. Stretching the two tiles across the
+   preview's full width made each one nearly as tall as the preview itself,
+   which inverted the hierarchy and pushed the dialog off the bottom of a
+   small window. A fixed, modest height says "also, this". */
+.tm-campick__bgopts .tm-bgopt__swatch {
+  aspect-ratio: auto;
+  height: 72px;
 }

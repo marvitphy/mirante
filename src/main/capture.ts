@@ -105,6 +105,8 @@ export function armedAudioPlan(): AudioPlan {
 }
 
 const THUMBNAIL_SIZE = { width: 480, height: 270 }
+/** Asking for no pixels at all. */
+const NO_THUMBNAIL = { width: 0, height: 0 }
 
 function toCaptureSource(source: DesktopCapturerSource): CaptureSource {
   return {
@@ -116,23 +118,52 @@ function toCaptureSource(source: DesktopCapturerSource): CaptureSource {
   }
 }
 
-async function readSources(): Promise<DesktopCapturerSource[]> {
+/**
+ * List the capturable things.
+ *
+ * `withPictures` is the whole cost. Measured on a machine with eight
+ * sources: around 500 ms with thumbnails and icons, around 40 ms without —
+ * Chromium captures a frame of every window to make them, and it does that
+ * work in the main process, where it stalls the entire app and is felt as
+ * the cursor itself going heavy.
+ *
+ * So the pictures are now asked for only by the thing that draws pictures.
+ */
+async function readSources(withPictures: boolean): Promise<DesktopCapturerSource[]> {
   return desktopCapturer.getSources({
     types: ['screen', 'window'],
-    thumbnailSize: THUMBNAIL_SIZE,
-    fetchWindowIcons: true
+    thumbnailSize: withPictures ? THUMBNAIL_SIZE : NO_THUMBNAIL,
+    fetchWindowIcons: withPictures
   })
 }
 
 export function registerCapture(): void {
+  // Names and ids, immediately. The picker can draw its whole grid from
+  // this and fill the pictures in afterwards, instead of making someone
+  // wait half a second staring at the button they just pressed.
   ipcMain.handle('capture:list-sources', async (): Promise<CaptureSource[]> => {
     try {
-      const sources = await readSources()
+      const sources = await readSources(false)
       log('capture', `listed ${sources.length} sources`)
       return sources.map(toCaptureSource)
     } catch (error) {
       log('capture', 'getSources failed:', String(error))
       return []
+    }
+  })
+
+  // The expensive half, requested once the grid is already on screen.
+  ipcMain.handle('capture:thumbnails', async (): Promise<Record<string, string>> => {
+    try {
+      const sources = await readSources(true)
+      const out: Record<string, string> = {}
+      for (const source of sources) {
+        if (!source.thumbnail.isEmpty()) out[source.id] = source.thumbnail.toDataURL()
+      }
+      return out
+    } catch (error) {
+      log('capture', 'thumbnails failed:', String(error))
+      return {}
     }
   })
 
@@ -142,7 +173,9 @@ export function registerCapture(): void {
    * closed while someone is deciding.
    */
   ipcMain.handle('capture:arm', async (_event, choice: CaptureChoice): Promise<boolean> => {
-    const sources = await readSources()
+    // No pictures here: this only needs a live handle, and paying for a
+    // frame of every window to get one was half of the stall on sharing.
+    const sources = await readSources(false)
     const source = sources.find((s) => s.id === choice.sourceId)
     if (!source) {
       log('capture', 'arm failed, source is gone:', choice.sourceId)

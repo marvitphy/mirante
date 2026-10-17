@@ -756,6 +756,7 @@ export function App(): JSX.Element {
       onToggleScreen={() => void toggleScreen()}
       onChangeSource={() => void openSourcePicker()}
       onToggleCamera={() => void toggleCamera()}
+      onPickCamera={() => setCameraPicker('adjust')}
       onToggleMic={() => void toggleMic()}
       onProfile={(profile: ScreenProfileName) => void session.setScreenProfile(profile)}
       onLeave={() => void leave()}
@@ -834,6 +835,7 @@ export function App(): JSX.Element {
           sizes={settings.overlaySizes}
           order={settings.overlayOrder}
           hidden={settings.overlayHidden}
+          round={settings.overlayRoundCameras}
           interactive={overlayLive}
           opacity={settings.overlayOpacity}
           listening={snapshot.listening}

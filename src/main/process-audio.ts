@@ -311,6 +311,16 @@ interface AudioTarget {
   executable: string | null
   /** For `process`: the window's own tree, used when the app cannot be named. */
   seedPid: number | null
+  /**
+   * What the person picked, in their words.
+   *
+   * The window title from the source picker — "Cyberpunk 2077", "YouTube —
+   * Chrome". Kept because the fallbacks below it are worse at naming things
+   * than the thing the user literally clicked on: resolving an executable
+   * can fail outright for an elevated process, and what reached the mixer
+   * then was "pid 15064".
+   */
+  label: string
 }
 
 /** How often the set of captured processes is reconciled with reality. */
@@ -420,11 +430,12 @@ export function mixerChannels(): MixerChannel[] {
     // not "msedgewebview2". Falling back to the file name is better than
     // nothing but it is the thing nobody recognises.
     const name = source.displayName.trim()
+    const fromFile = source.executable.replace(/\.exe$/i, '')
     seen.set(key, {
       executable: source.executable,
-      displayName: name && name !== source.executable
-        ? name
-        : source.executable.replace(/\.exe$/i, ''),
+      // Never a bare pid. If every name resolution failed, the file name
+      // without its extension still tells somebody more than a number.
+      displayName: name && name !== source.executable ? name : fromFile,
       gain: gainFor(source.executable)
     })
   }
@@ -516,7 +527,14 @@ function rescan(window?: BrowserWindow): void {
     if (!sources.has(pid)) {
       const app = apps.get(pid)
       const executable = app?.executable ?? executableForPid(pid) ?? `pid ${pid}`
-      openCapture(mod, pid, executable, app?.displayName ?? executable)
+      // Best name first: what Windows calls the audio session, then the
+      // window the person actually picked, then the file, then the pid —
+      // which is a last resort nobody should ever see.
+      const name =
+        app?.displayName?.trim() ||
+        (target?.kind === 'process' ? target.label.trim() : '') ||
+        executable
+      openCapture(mod, pid, executable, name)
     }
   }
 
@@ -560,10 +578,10 @@ export function startProcessAudio(
       console.log(`[process-audio] ${executable} carrega vozes; sem audio`)
       return null
     }
-    target = { kind: 'process', executable, seedPid: plan.pid }
+    target = { kind: 'process', executable, seedPid: plan.pid, label: plan.label }
     console.log(`[process-audio] seguindo ${executable ?? 'pid ' + plan.pid}`)
   } else {
-    target = { kind: 'everything', executable: null, seedPid: null }
+    target = { kind: 'everything', executable: null, seedPid: null, label: '' }
   }
 
   rescan(window)

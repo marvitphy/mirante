@@ -9,6 +9,7 @@ import {
   IconMic,
   IconMicOff,
   IconScreen,
+  IconCaret,
   IconSettings,
   IconSliders
 } from './icons'
@@ -31,6 +32,8 @@ interface ControlDockProps {
   /** Swap the shared window or screen without stopping the broadcast. */
   onChangeSource: () => void
   onToggleCamera: () => void
+  /** Choose WHICH camera, which is a different question from on or off. */
+  onPickCamera: () => void
   onToggleMic: () => void
   onProfile: (profile: ScreenProfileName) => void
   onLeave: () => void
@@ -54,6 +57,7 @@ export function ControlDock({
   onToggleScreen,
   onChangeSource,
   onToggleCamera,
+  onPickCamera,
   onToggleMic,
   onProfile,
   onLeave,
@@ -133,15 +137,31 @@ export function ControlDock({
           primary actions was giving the most routine toggles in the app the
           visual weight of the most consequential one. */}
       <div className="tm-dock__devices">
-        <button
-          type="button"
-          className={`tm-dock__device${cameraOn ? ' is-on' : ''}`}
-          onClick={onToggleCamera}
-          aria-pressed={cameraOn}
-          title="Câmera (Ctrl+Shift+C)"
-        >
-          {cameraOn ? <IconCamera size={16} /> : <IconCameraOff size={16} />}
-        </button>
+        {/* Split, because these are two questions and only one of them had
+            an answer anywhere: whether the camera is on, and which camera it
+            is. Changing camera used to mean going into settings, under a row
+            labelled for the background — or turning the camera off and on
+            and hoping. */}
+        <div className="tm-dock__device-pair">
+          <button
+            type="button"
+            className={`tm-dock__device${cameraOn ? ' is-on' : ''}`}
+            onClick={onToggleCamera}
+            aria-pressed={cameraOn}
+            title="Câmera (Ctrl+Shift+C)"
+          >
+            {cameraOn ? <IconCamera size={16} /> : <IconCameraOff size={16} />}
+          </button>
+          <button
+            type="button"
+            className="tm-dock__device-more"
+            onClick={onPickCamera}
+            title="Escolher a câmera e o fundo"
+            aria-label="Escolher a câmera"
+          >
+            <IconCaret size={12} />
+          </button>
+        </div>
         <button
           type="button"
           className={`tm-dock__device${micOn ? ' is-on' : ''}`}

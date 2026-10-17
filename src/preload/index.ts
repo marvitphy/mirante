@@ -25,6 +25,15 @@ export interface MiranteApi {
     /** Everything shareable right now, with live thumbnails. */
     listSources: () => Promise<CaptureSource[]>
     /**
+     * The pictures, fetched separately because they are the expensive part.
+     *
+     * Measured with eight sources: about 500 ms with thumbnails, about 40 ms
+     * without — Chromium grabs a frame of every window to build them, in the
+     * main process, where it stalls the whole app. Asking for them after the
+     * grid is already drawn keeps the stall off the click.
+     */
+    thumbnails: () => Promise<Record<string, string>>
+    /**
      * Commit to a source, then call `getDisplayMedia()`. Resolves false when
      * the source disappeared while the picker was open. Arming before asking
      * is what keeps cancellation out of Chromium entirely — see capture.ts.
@@ -119,6 +128,8 @@ const api: MiranteApi = {
   },
   capture: {
     listSources: () => ipcRenderer.invoke('capture:list-sources') as Promise<CaptureSource[]>,
+    thumbnails: () =>
+      ipcRenderer.invoke('capture:thumbnails') as Promise<Record<string, string>>,
     arm: (choice) => ipcRenderer.invoke('capture:arm', choice) as Promise<boolean>,
     disarm: () => ipcRenderer.send('capture:disarm')
   },
