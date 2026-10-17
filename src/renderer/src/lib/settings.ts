@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 import { setSoundsMuted } from './sounds'
+import type { NoiseSuppression } from '../rtc/mic-chain'
 import type { ScreenProfileName } from '../rtc/sdp'
 
 /**
@@ -20,6 +21,25 @@ export interface Settings {
   speakerId: string
   /** 0..1, applied to everyone you listen to. */
   masterVolume: number
+  /**
+   * How hard to work on the noise around your microphone.
+   *
+   * `standard` is what the app has always done, and is the default so that
+   * a voice people already called good does not change under them.
+   * `strong` adds RNNoise, which judges speech against noise per band
+   * rather than subtracting a steady floor — the difference between
+   * handling a fan and handling a keyboard, a chair or a television in the
+   * same room.
+   */
+  noiseSuppression: NoiseSuppression
+  /**
+   * Your own microphone level, 0..2.
+   *
+   * Everyone could already turn everyone else up or down and nobody could
+   * do anything about themselves, which left "you are too quiet" as a
+   * problem only the listener could work around, one listener at a time.
+   */
+  micGain: number
   /** Join, leave, broadcast start and stop cues. */
   roomSounds: boolean
   /** Quality the next share starts at. */
@@ -90,6 +110,8 @@ export const DEFAULT_SETTINGS: Settings = {
   microphoneId: '',
   speakerId: '',
   masterVolume: 1,
+  noiseSuppression: 'standard',
+  micGain: 1,
   roomSounds: true,
   defaultProfile: 'smooth',
   shareWithSound: true,

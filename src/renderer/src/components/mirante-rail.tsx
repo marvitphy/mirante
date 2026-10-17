@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 
 import type { AudioMixer } from '../rtc/audio-mixer'
+import { micLevel } from '../rtc/mic-chain'
 import type { PeerView } from '../rtc/mesh-session'
 import { Avatar } from './avatar'
 import { IconMic, IconMicOff, IconScreen, IconVolume, IconVolumeOff } from './icons'
@@ -99,6 +100,7 @@ export function MiranteRail({
           active={focused === null}
           label="Sua prévia"
           onFocus={() => onFocus(null)}
+          level={micOn ? micLevel : undefined}
           corner={<span className="tm-tile__self-mark label">você</span>}
           slot={
             // Clickable, not decorative. An icon that looks like a button and
@@ -175,6 +177,37 @@ interface TileProps {
   /** Overlay pinned inside the frame, e.g. the "você" mark or a share badge. */
   corner?: ReactNode
   mirrored?: boolean
+  /**
+   * Turn this person up or down with the wheel, over the tile itself.
+   *
+   * The same gesture the overlay and the sliders already use. A row of
+   * faces is the most obvious place in the app to reach for someone's
+   * volume, and until now it was the one place that did not answer.
+   */
+  onAdjust?: (delta: number) => void
+  /**
+   * Where that wheel has left them, 0..2.
+   *
+   * Drawn across the tile for a moment after it moves, then gone. Without
+   * it the gesture is a guess: the sound changes, but by how much, how far
+   * from where it was, and how much further it can go are all invisible —
+   * and on a muted or silent friend nothing happens at all, which reads as
+   * a broken control rather than as a quiet one.
+   */
+  adjusted?: number
+  /**
+   * How loud this person is right now, 0..1, polled every frame.
+   *
+   * A getter rather than a value, because a number would mean re-rendering
+   * the whole rail sixty times a second to animate one ring.
+   *
+   * This lives on `Tile` and not on `PeerTile` so that your own tile gets
+   * it too. It used to be PeerTile's alone, which is why everyone in the
+   * room lit up when they spoke and you never did — the one person who
+   * cannot hear themselves was also the one with no indication that their
+   * microphone was working.
+   */
+  level?: () => number
   children?: ReactNode
 }
 
@@ -188,9 +221,21 @@ function Tile({
   slot,
   corner,
   mirrored = false,
+  onAdjust,
+  adjusted,
+  level,
   children
 }: TileProps): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const tileRef = useRef<HTMLDivElement | null>(null)
+  const ringRef = useRef<HTMLSpanElement>(null)
+  // Held in a ref so a caller passing an inline arrow does not restart the
+  // animation loop on every render.
+  const levelRef = useRef(level)
+  levelRef.current = level
+  const adjustRef = useRef(onAdjust)
+  adjustRef.current = onAdjust
+  const scrubRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const video = videoRef.current
@@ -201,8 +246,68 @@ function Tile({
     }
   }, [stream])
 
+  // Bound natively, because React registers wheel listeners as passive and
+  // a passive listener cannot call preventDefault — the volume would move
+  // and the rail would scroll out from under the cursor at the same time.
+  const adjustable = onAdjust !== undefined
+  useEffect(() => {
+    const node = tileRef.current
+    if (!node || !adjustable) return
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault()
+      adjustRef.current?.(event.deltaY < 0 ? 0.05 : -0.05)
+    }
+    node.addEventListener('wheel', onWheel, { passive: false })
+    return () => node.removeEventListener('wheel', onWheel)
+  }, [adjustable])
+
+  // Show the bar when the value moves, then take it away. Mounting is not a
+  // move: a rail of tiles all flashing their volume on arrival would be
+  // noise, and the bar means "this just changed".
+  const first = useRef(true)
+  useEffect(() => {
+    // Nothing to show, and the next value that arrives is an arrival rather
+    // than a change. Without this reset, a friend who mutes and unmutes
+    // comes back with their volume bar flashing at a gesture nobody made.
+    if (adjusted === undefined) {
+      first.current = true
+      return
+    }
+    if (first.current) {
+      first.current = false
+      return
+    }
+    const node = scrubRef.current
+    if (!node) return
+    node.dataset.on = 'true'
+    const timer = window.setTimeout(() => {
+      node.dataset.on = 'false'
+    }, 900)
+    return () => window.clearTimeout(timer)
+  }, [adjusted])
+
+  // Driven by rAF straight from the analyser and written to the DOM — never
+  // through state, so a talking friend does not re-render the whole rail.
+  const metered = level !== undefined
+  useEffect(() => {
+    if (!metered) return
+    let frame = 0
+    const paint = (): void => {
+      const node = ringRef.current
+      const read = levelRef.current
+      if (node && read) node.style.opacity = read() > 0.04 ? '1' : '0'
+      frame = requestAnimationFrame(paint)
+    }
+    frame = requestAnimationFrame(paint)
+    return () => cancelAnimationFrame(frame)
+  }, [metered])
+
   return (
-    <div role="listitem" className={`tm-tile${active ? ' is-active' : ''}`}>
+    <div
+      ref={tileRef}
+      role="listitem"
+      className={`tm-tile${active ? ' is-active' : ''}${adjustable ? ' is-adjustable' : ''}`}
+    >
       {/* Layout lives on this plain div. A <button> must never be the flex
           container here: Chromium lays a button's children out through an
           anonymous content box, which stops the frame stretching and pushed
@@ -231,6 +336,21 @@ function Tile({
         <span className="tm-sr">{label}</span>
       </button>
 
+      {metered && <span ref={ringRef} className="tm-tile__ring" aria-hidden="true" />}
+      {adjusted !== undefined && (
+        <div ref={scrubRef} className="tm-tile__scrub" data-on="false" aria-hidden="true">
+          <span className="tm-tile__scrub-value num">{formatVolume(adjusted)}</span>
+          <span className="tm-tile__scrub-track">
+            <span
+              className="tm-tile__scrub-fill"
+              // Half is 1.0, so the midpoint of the bar is "normal" and a
+              // boost is visibly past it rather than merely further along.
+              data-boost={adjusted > 1}
+              style={{ transform: `scaleY(${Math.min(1, adjusted / 2)})` }}
+            />
+          </span>
+        </div>
+      )}
       {children}
     </div>
   )
@@ -251,7 +371,6 @@ function PeerTile({
   onVolume: (volume: number) => void
   onToggleMute: () => void
 }): JSX.Element {
-  const ringRef = useRef<HTMLSpanElement>(null)
   const [open, setOpen] = useState(false)
   const live = peer.link === 'live'
   // Broadcasting, but we are not receiving it. An offer, not a picture — and
@@ -261,29 +380,21 @@ function PeerTile({
   // you can see that you turned someone down three days ago.
   const touched = peer.audible && (peer.audio.muted || peer.audio.volume !== 1)
 
-  // Audio level ring, driven by rAF straight from the analyser and written to
-  // the DOM — never through state, so a talking friend does not re-render the
-  // whole rail sixty times a second.
-  useEffect(() => {
-    if (!live) return
-    let frame = 0
-    const paint = (): void => {
-      const node = ringRef.current
-      if (node) node.style.opacity = mixer.level(peer.info.id) > 0.04 ? '1' : '0'
-      frame = requestAnimationFrame(paint)
-    }
-    frame = requestAnimationFrame(paint)
-    return () => cancelAnimationFrame(frame)
-  }, [live, mixer, peer.info.id])
-
   return (
     <Tile
       name={peer.info.name}
       hue={peer.info.hue}
       stream={peer.camera}
       active={active}
+      level={live ? () => mixer.level(peer.info.id) : undefined}
+      adjusted={peer.audible ? peer.audio.volume : undefined}
       label={inviting ? `Assistir ${peer.info.name}` : `Ver ${peer.info.name}`}
       onFocus={onFocus}
+      onAdjust={
+        peer.audible
+          ? (delta) => onVolume(Math.min(2, Math.max(0, peer.audio.volume + delta)))
+          : undefined
+      }
       corner={
         peer.state.screen ? (
           <span
@@ -300,7 +411,6 @@ function PeerTile({
       }
       slot={<SignalMeter stats={peer.stats} live={live} />}
     >
-      <span ref={ringRef} className="tm-tile__ring" aria-hidden="true" />
 
       {inviting && (
         <span className="tm-tile__invite" aria-hidden="true">

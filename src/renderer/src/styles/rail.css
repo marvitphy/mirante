@@ -438,3 +438,62 @@
   font-size: var(--text-nano);
   letter-spacing: var(--tracking-label);
 }
+
+/* The wheel's receipt: where this person's volume landed, for a moment.
+   Vertical, down the left edge. Horizontal across the bottom put it
+   straight through the speaker button in the corner, and a readout that
+   has to share a strip with a control is a readout that will be covered.
+   Vertical also matches the gesture: the wheel moves up and down, and so
+   does this. */
+.tm-tile__scrub {
+  position: absolute;
+  z-index: 3;
+  left: 8px;
+  top: 8px;
+  bottom: 38px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  opacity: 0;
+  transform: translateX(-4px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.tm-tile__scrub[data-on='true'] {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.tm-tile__scrub-track {
+  flex: 1;
+  width: 3px;
+  border-radius: 999px;
+  background: hsl(258 40% 4% / 0.75);
+  overflow: hidden;
+}
+
+.tm-tile__scrub-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Grows upward from the floor, the way a level does. */
+  transform-origin: bottom center;
+  border-radius: inherit;
+  background: hsl(152 60% 52%);
+}
+
+/* Past normal. The colour is the warning; the length only says how far. */
+.tm-tile__scrub-fill[data-boost='true'] {
+  background: hsl(44 92% 58%);
+}
+
+.tm-tile__scrub-value {
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: hsl(258 20% 92%);
+  background: hsl(258 40% 2% / 0.85);
+}

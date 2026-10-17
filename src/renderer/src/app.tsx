@@ -26,6 +26,14 @@ import {
 import { useAutoHide } from './lib/use-auto-hide'
 import { useHotkeys } from './lib/use-hotkeys'
 import { CameraFeed, type SelfView } from './rtc/camera-background'
+import {
+  closeMic,
+  micDeviceId,
+  needsReopen,
+  openMic,
+  setMicGain,
+  setNoiseSuppression
+} from './rtc/mic-chain'
 import { createPcmTrack, type PcmTrackHandle } from './rtc/pcm-track'
 import { captureConstraints, type ScreenProfileName } from './rtc/sdp'
 import { session, useSession } from './rtc/use-session'
@@ -352,20 +360,12 @@ export function App(): JSX.Element {
   const toggleMic = useCallback(async () => {
     if (snapshot.local.mic) {
       await session.setMic(null)
+      closeMic()
       return
     }
     try {
-      const { microphoneId } = getSettings()
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1
-        }
-      })
-      await session.setMic(stream)
+      const { microphoneId, noiseSuppression, micGain } = getSettings()
+      await session.setMic(await openMic(microphoneId, noiseSuppression, micGain))
     } catch (error) {
       console.warn('[media] microphone denied:', error)
     }
@@ -433,28 +433,53 @@ export function App(): JSX.Element {
     setSelfView(feed.selfView)
   }, [settings.mirrorSelf])
 
+  /**
+   * Changing microphone, or crossing in or out of "sem redução".
+   *
+   * Those are the two changes that cannot be made on a live chain: the
+   * device is chosen at capture, and so are `noiseSuppression` and
+   * `autoGainControl`. Everything else — the level, and moving between
+   * padrão and forte — is applied to the running graph below, without the
+   * far side ever seeing a new track.
+   *
+   * The device comparison reads the RAW capture rather than the track being
+   * sent, which now comes out of a destination node and reports no device
+   * of its own. Comparing against that one found a mismatch every time and
+   * reopened the microphone on every unrelated settings change.
+   */
+  const micLevelSetting = useRef(settings.noiseSuppression)
   useEffect(() => {
-    if (!snapshot.local.mic) return
-    const active = snapshot.local.mic.getAudioTracks()[0]
-    if (!active || active.getSettings().deviceId === settings.microphoneId) return
+    if (!snapshot.local.mic) {
+      micLevelSetting.current = settings.noiseSuppression
+      return
+    }
+    const level = settings.noiseSuppression
+    const reopen =
+      micDeviceId() !== settings.microphoneId ||
+      needsReopen(micLevelSetting.current, level)
+    micLevelSetting.current = level
+
     void (async () => {
       try {
-        const next = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            ...(settings.microphoneId ? { deviceId: { exact: settings.microphoneId } } : {}),
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1
-          }
-        })
-        await session.swapDevice('mic', next)
+        if (reopen) {
+          await session.swapDevice(
+            'mic',
+            await openMic(settings.microphoneId, level, settings.micGain)
+          )
+        } else {
+          await setNoiseSuppression(level)
+        }
       } catch (error) {
         console.warn('[settings] could not switch microphone:', error)
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.microphoneId])
+  }, [settings.microphoneId, settings.noiseSuppression])
+
+  // The level is a live parameter, so it never touches the track.
+  useEffect(() => {
+    setMicGain(settings.micGain)
+  }, [settings.micGain])
 
   // --- viewing -------------------------------------------------------------
 

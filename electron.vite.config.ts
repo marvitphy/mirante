@@ -29,6 +29,10 @@ export default defineConfig({
       alias: { '@': resolve(__dirname, 'src/renderer/src') }
     },
     plugins: [react()],
+    // An AudioWorklet module is loaded as an ES module, so the worklet
+    // bundle has to be one. Vite's default for workers is IIFE, under which
+    // `addModule` fails on a bare `export` with no useful message.
+    worker: { format: 'es' },
     define: {
       // Baked at build time. A packaged app handed to friends cannot default
       // to localhost — there would be no server there to reach.

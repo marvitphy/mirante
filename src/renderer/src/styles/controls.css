@@ -860,6 +860,29 @@
   color: var(--text-tertiary);
 }
 
+/* Your own level, right under the slider that sets it.
+   Full width rather than inside the control column: the one thing you
+   cannot do is hear yourself, so this is the whole reason the slider above
+   it is usable, and a meter you have to hunt for is one you will not use. */
+.tm-micmeter {
+  height: 4px;
+  margin: calc(var(--s-2) * -1) 0 var(--s-4);
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.tm-micmeter__fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  transform-origin: left center;
+  transform: scaleX(0);
+  border-radius: inherit;
+  /* Green through amber to red across the travel, so "too hot" is a colour
+     you notice without reading a number. */
+  background: linear-gradient(90deg, hsl(152 60% 48%), hsl(44 92% 58%) 78%, hsl(4 84% 60%));
+}
+
 /* Native select, styled to match. Composing a headless listbox would buy
    nothing here: a device list is exactly what a select is for, and the
    native one already has keyboard and screen-reader behaviour. */

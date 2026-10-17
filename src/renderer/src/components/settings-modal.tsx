@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type JSX, type ReactNode } from 'react'
 
 import {
   activeBackground,
@@ -10,6 +10,7 @@ import {
   type DeviceList
 } from '../lib/settings'
 import { formatVolume } from '../lib/format'
+import { micLevel, type NoiseSuppression } from '../rtc/mic-chain'
 import { SCREEN_PROFILES, type ScreenProfileName } from '../rtc/sdp'
 import { IconClose } from './icons'
 import { ShortcutField } from './shortcut-field'
@@ -230,6 +231,44 @@ export function SettingsModal({
 
           {tab === 'audio' && (
             <>
+              <Group title="Sua voz">
+                <Row
+                  label="Volume do seu microfone"
+                  hint="Como você chega nos outros. A barra mostra o que está sendo enviado."
+                >
+                  <div className="tm-setting__slider">
+                    <input
+                      type="range"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={settings.micGain}
+                      onChange={(e) => updateSettings({ micGain: Number(e.target.value) })}
+                    />
+                    <span className="num">{formatVolume(settings.micGain)}</span>
+                  </div>
+                </Row>
+
+                <MicMeter />
+
+                {/* A select, like the three device rows directly above it.
+                    Segmented buttons here would be a fourth control shape in
+                    one short column, and the question — pick one of three —
+                    is the same question those rows already ask. */}
+                <Row
+                  label="Redução de ruído"
+                  hint={NOISE_HINTS[settings.noiseSuppression]}
+                >
+                  <Picker
+                    value={settings.noiseSuppression}
+                    onChange={(value) =>
+                      updateSettings({ noiseSuppression: value as NoiseSuppression })
+                    }
+                    options={NOISE_LEVELS}
+                  />
+                </Row>
+              </Group>
+
               <Group title="O que você escuta">
             <Row label="Volume geral" hint="Afeta todo mundo de uma vez.">
               <div className="tm-setting__slider">
@@ -379,6 +418,53 @@ export function SettingsModal({
           </button>
         </footer>
       </div>
+    </div>
+  )
+}
+
+const NOISE_LEVELS: Array<{ value: NoiseSuppression; label: string }> = [
+  { value: 'off', label: 'Nenhuma' },
+  { value: 'standard', label: 'Padrão' },
+  { value: 'strong', label: 'Forte' }
+]
+
+/**
+ * What each level actually does, in the words of the problem it solves.
+ *
+ * "Padrão" and "Forte" are not two strengths of the same thing — they are
+ * two different methods, and which one is right depends on what is making
+ * the noise, not on how much of it there is.
+ */
+const NOISE_HINTS: Record<NoiseSuppression, string> = {
+  off: 'Sem tratamento e sem ganho automático. Para quem já trata a voz fora do Mirante.',
+  standard: 'Remove o ruído constante do ambiente: ventilador, ar, chiado.',
+  strong: 'Também corta teclado, cadeira, TV e gente falando atrás. Usa um pouco mais de CPU.'
+}
+
+/**
+ * Your own level, live.
+ *
+ * Next to the slider because a level control without a meter is a guess —
+ * the one thing you cannot do is hear yourself, which is exactly why this
+ * setting did not exist before and exactly why it needs this.
+ */
+function MicMeter(): JSX.Element {
+  const barRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    let frame = 0
+    const paint = (): void => {
+      const node = barRef.current
+      if (node) node.style.transform = `scaleX(${micLevel()})`
+      frame = requestAnimationFrame(paint)
+    }
+    frame = requestAnimationFrame(paint)
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  return (
+    <div className="tm-micmeter">
+      <span ref={barRef} className="tm-micmeter__fill" />
     </div>
   )
 }

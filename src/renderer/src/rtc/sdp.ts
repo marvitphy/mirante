@@ -259,15 +259,42 @@ export interface OpusTuning {
   ptimeMs: number
 }
 
+/** What someone is SHOWING: music, a game, a video. Stereo earns its place. */
 export const MEDIA_OPUS: OpusTuning = { stereo: true, maxAverageBitrate: 320_000, ptimeMs: 10 }
-export const VOICE_OPUS: OpusTuning = { stereo: false, maxAverageBitrate: 64_000, ptimeMs: 20 }
 
-export function tuneOpus(sdp: string, tuning: OpusTuning): string {
-  const payload = sdp.match(/^a=rtpmap:(\d+)\s+opus\/48000/im)?.[1]
-  if (!payload) return sdp
+/**
+ * A VOICE, which is one mouth and therefore mono.
+ *
+ * Mono is the obvious half. The half that was actually audible is the
+ * bitrate. Until now the microphone section reached no tuning at all and ran
+ * on Chromium's default of roughly 32 kbit/s, and that is where "a faint
+ * hiss on my voice, like some spatial sound" comes from: below about 64
+ * kbit/s Opus stops coding the top of the spectrum and fills it by folding
+ * noise-shaped copies of the lower bands up into it. The result is a wash of
+ * breath-coloured noise that moves WITH the voice, which is why it reads as
+ * space around someone rather than as hiss on the line. No amount of noise
+ * suppression touches it — it is added after capture, by the encoder.
+ *
+ * 96 kbit/s mono is far above where that folding starts, and against a video
+ * stream measured in megabits it costs nothing worth counting.
+ *
+ * 20 ms packets rather than media's 10: in-band FEC carries a copy of the
+ * previous frame inside the next one, and fewer, larger packets both make
+ * that cheaper and halve the header overhead. On a voice that trade is worth
+ * more than five milliseconds.
+ *
+ * Note which direction these travel. Per RFC 7587 `maxaveragebitrate` and
+ * `stereo` describe what the SENDER OF THIS SDP wants to RECEIVE — they
+ * instruct the far encoder, not ours. Our own microphone goes to 96k because
+ * the other end is running this same code and asking us for it. The
+ * `sprop-` pair is the half that describes us.
+ */
+export const VOICE_OPUS: OpusTuning = { stereo: false, maxAverageBitrate: 96_000, ptimeMs: 20 }
 
+/** The fmtp body for one tuning. */
+function opusFmtp(tuning: OpusTuning): string {
   const stereo = tuning.stereo ? 1 : 0
-  const desired = [
+  return [
     `maxaveragebitrate=${tuning.maxAverageBitrate}`,
     'maxplaybackrate=48000',
     `minptime=${tuning.ptimeMs}`,
@@ -277,6 +304,48 @@ export function tuneOpus(sdp: string, tuning: OpusTuning): string {
     'usedtx=0',
     'useinbandfec=1'
   ].join(';')
+}
+
+/**
+ * Tune each audio section for what that section carries.
+ *
+ * There are two of them — the sound of a shared screen, and a microphone —
+ * and they want opposite things, which is why there have always been two
+ * tunings here. Only one was ever reaching the wire: the whole SDP was
+ * treated as one string and the fmtp replacement was not global, so it
+ * landed on the first audio section and stopped. Slots are created screen,
+ * camera, screen audio, microphone, so the first audio section is the screen
+ * and the microphone got nothing. VOICE_OPUS was defined, exported, and
+ * referenced by no one.
+ *
+ * The `ptime` strip, meanwhile, WAS global, so the microphone section also
+ * lost its packet size and never had one put back.
+ *
+ * Cutting at the m-lines first means each section is tuned by what it is,
+ * and the result no longer depends on the order the transceivers happened to
+ * be created in.
+ */
+export function tuneOpusBySection(
+  sdp: string,
+  media: OpusTuning,
+  voice: OpusTuning,
+  voiceMids: string[]
+): string {
+  const parts = sdp.split(/^(?=m=)/m)
+  return parts
+    .map((section) => {
+      if (!section.startsWith('m=audio')) return section
+      const mid = section.match(/^a=mid:(\S+)/im)?.[1] ?? ''
+      return tuneOpus(section, voiceMids.includes(mid) ? voice : media)
+    })
+    .join('')
+}
+
+export function tuneOpus(sdp: string, tuning: OpusTuning): string {
+  const payload = sdp.match(/^a=rtpmap:(\d+)\s+opus\/48000/im)?.[1]
+  if (!payload) return sdp
+
+  const desired = opusFmtp(tuning)
 
   const fmtpLine = new RegExp(`^a=fmtp:${payload} .*$`, 'im')
   let out = fmtpLine.test(sdp)
@@ -311,8 +380,15 @@ export function keepLatencyExtensions(sdp: string): string {
 
 export function applyAudioTuning(
   description: RTCSessionDescriptionInit,
-  tuning: OpusTuning
+  media: OpusTuning,
+  voice: OpusTuning = VOICE_OPUS,
+  voiceMids: string[] = []
 ): RTCSessionDescriptionInit {
   if (!description.sdp) return description
-  return { type: description.type, sdp: keepLatencyExtensions(tuneOpus(description.sdp, tuning)) }
+  return {
+    type: description.type,
+    sdp: keepLatencyExtensions(
+      tuneOpusBySection(description.sdp, media, voice, voiceMids)
+    )
+  }
 }

@@ -4,6 +4,7 @@ import {
   applyProfile,
   CAMERA_PROFILE,
   MEDIA_OPUS,
+  VOICE_OPUS,
   preferCodecs,
   setContentHint,
   SCREEN_PROFILES,
@@ -106,6 +107,17 @@ const SLOTS: Array<{ name: SlotName; kind: 'video' | 'audio' }> = [
   { name: 'screenAudio', kind: 'audio' },
   { name: 'mic', kind: 'audio' }
 ]
+
+/**
+ * The mids whose audio is a voice rather than something being shown.
+ *
+ * Slots are created in this order and `mid` is assigned in that order, so
+ * the position in this table IS the mid on the wire — the same identity the
+ * receiving side already uses in `ontrack` to know what arrived.
+ */
+const VOICE_MIDS = SLOTS.map((slot, index) => ({ slot, index }))
+  .filter(({ slot }) => slot.name === 'mic')
+  .map(({ index }) => String(index))
 
 const STATS_INTERVAL_MS = 1_000
 /**
@@ -460,7 +472,7 @@ export class PeerLink {
     this.makingOffer = true
     try {
       const offer = await this.pc.createOffer()
-      const tuned = applyAudioTuning(offer, MEDIA_OPUS)
+      const tuned = applyAudioTuning(offer, MEDIA_OPUS, VOICE_OPUS, VOICE_MIDS)
       await this.pc.setLocalDescription(tuned)
       this.options.send({ cmd: 'offer', offer: tuned })
     } catch (error) {
@@ -476,7 +488,7 @@ export class PeerLink {
     this.makingOffer = true
     try {
       const offer = await this.pc.createOffer()
-      const tuned = applyAudioTuning(offer, MEDIA_OPUS)
+      const tuned = applyAudioTuning(offer, MEDIA_OPUS, VOICE_OPUS, VOICE_MIDS)
       await this.pc.setLocalDescription(tuned)
       return tuned
     } finally {
@@ -488,7 +500,7 @@ export class PeerLink {
     await this.pc.setRemoteDescription(offer)
     await this.drainCandidates()
     const answer = await this.pc.createAnswer()
-    const tuned = applyAudioTuning(answer, MEDIA_OPUS)
+    const tuned = applyAudioTuning(answer, MEDIA_OPUS, VOICE_OPUS, VOICE_MIDS)
     await this.pc.setLocalDescription(tuned)
     return tuned
   }
@@ -530,7 +542,7 @@ export class PeerLink {
     this.makingOffer = true
     try {
       const offer = await this.pc.createOffer({ iceRestart: true })
-      const tuned = applyAudioTuning(offer, MEDIA_OPUS)
+      const tuned = applyAudioTuning(offer, MEDIA_OPUS, VOICE_OPUS, VOICE_MIDS)
       await this.pc.setLocalDescription(tuned)
       this.options.send({ cmd: 'reconnectOffer', offer: tuned })
     } catch (error) {
