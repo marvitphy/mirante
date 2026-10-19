@@ -3,6 +3,12 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 import type { CaptureChoice, CaptureSource } from '../main/capture'
 import type { AudioApp, AudioCapability , MixerChannel } from '../main/process-audio'
+import type {
+  TransferCloseResult,
+  TransferFileRef,
+  TransferOpenResult,
+  TransferWriteResult
+} from '../shared/transfer'
 import type { UpdateState } from '../main/updater'
 
 export interface WindowState {
@@ -99,6 +105,14 @@ export interface MiranteApi {
     onInteract: (handler: () => void) => () => void
   }
 
+  transfer: {
+    open: (files: TransferFileRef[]) => Promise<TransferOpenResult>
+    write: (token: string, fileId: string, chunk: ArrayBuffer) => Promise<TransferWriteResult>
+    close: (token: string) => Promise<TransferCloseResult>
+    cancel: (token: string) => Promise<void>
+    reveal: (path: string) => void
+  }
+
   /** Auto-update from GitHub Releases. Packaged builds only. */
   update: {
     state: () => Promise<UpdateState>
@@ -170,6 +184,14 @@ const api: MiranteApi = {
     onInteract: (handler) => subscribe('overlay:hotkey:interact', () => handler())
   },
 
+  transfer: {
+    open: (files) => ipcRenderer.invoke('transfer:open', files) as Promise<TransferOpenResult>,
+    write: (token, fileId, chunk) =>
+      ipcRenderer.invoke('transfer:write', token, fileId, chunk) as Promise<TransferWriteResult>,
+    close: (token) => ipcRenderer.invoke('transfer:close', token) as Promise<TransferCloseResult>,
+    cancel: (token) => ipcRenderer.invoke('transfer:cancel', token) as Promise<void>,
+    reveal: (path) => ipcRenderer.send('transfer:reveal', path)
+  },
   update: {
     state: () => ipcRenderer.invoke('update:state') as Promise<UpdateState>,
     check: () => ipcRenderer.invoke('update:check') as Promise<UpdateState>,

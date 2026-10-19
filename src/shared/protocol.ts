@@ -95,7 +95,7 @@ export type ClientMessage =
    * full copy of their upload for every viewer who stepped out.
    */
   | { t: 'watchVideo'; to: PeerId; video: boolean }
-  | { t: 'signal'; to: PeerId; dir: StreamDir; payload: SignalPayload }
+  | { t: 'signal'; to: PeerId; dir: SignalLane; payload: SignalPayload }
   | { t: 'ping'; ts: number }
   /**
    * Leaving on purpose. Without this the server only learns you left when the
@@ -121,7 +121,7 @@ export type ServerMessage =
   | { t: 'join'; from: PeerId }
   | { t: 'leaveStream'; from: PeerId }
   | { t: 'watchVideo'; from: PeerId; video: boolean }
-  | { t: 'signal'; from: PeerId; dir: StreamDir; payload: SignalPayload }
+  | { t: 'signal'; from: PeerId; dir: SignalLane; payload: SignalPayload }
   | { t: 'pong'; ts: number }
   | { t: 'error'; code: string; message: string }
 
@@ -162,6 +162,8 @@ export interface IceCandidate {
  */
 export type StreamDir = 'out' | 'in'
 
+export type SignalLane = StreamDir | 'xfer'
+
 export type SignalPayload =
   /** Admission + offer in one message. `decision:false` means the publisher refused. */
   | { cmd: 'joinResponse'; decision: boolean; offer?: SessionDescription; reason?: string }
@@ -170,6 +172,20 @@ export type SignalPayload =
   | { cmd: 'iceCandidate'; candidate: IceCandidate }
   /** ICE restart on an existing session rather than a teardown + rejoin. */
   | { cmd: 'reconnectOffer'; offer: SessionDescription }
+  | { cmd: 'fileOffer'; session: string; files: FileMeta[]; ttlMs: number }
+  | { cmd: 'fileAccept'; session: string }
+  | { cmd: 'fileDeny'; session: string; reason: string }
+  | { cmd: 'fileCancel'; session: string }
+  | { cmd: 'filePcOffer'; session: string; offer: SessionDescription }
+  | { cmd: 'filePcAnswer'; session: string; answer: SessionDescription }
+  | { cmd: 'fileIce'; session: string; candidate: IceCandidate }
+
+export interface FileMeta {
+  id: string
+  name: string
+  size: number
+  mime: string
+}
 
 /** Mirrors RTCIceServer but stays serialisable across the wire and IPC. */
 export interface RTCIceServerConfig {

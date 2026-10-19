@@ -23,6 +23,19 @@ export function formatVolume(volume: number): string {
   return `${Math.round(volume * 100)}%`
 }
 
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1).replace('.', ',')} ${units[unit]}`
+}
+
 /** Elapsed time as m:ss, or h:mm:ss past an hour. */
 export function formatElapsed(sinceMs: number): string {
   const total = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000))

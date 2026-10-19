@@ -1,10 +1,12 @@
 import { useState, type JSX } from 'react'
 
 import type { ScreenProfileName } from '../rtc/sdp'
+import { useTransfers } from '../rtc/use-session'
 import { AppMixer } from './app-mixer'
 import {
   IconCamera,
   IconCameraOff,
+  IconFile,
   IconLeave,
   IconMic,
   IconMicOff,
@@ -13,6 +15,7 @@ import {
   IconSettings,
   IconSliders
 } from './icons'
+import { TransferPanel } from './transfer-panel'
 import { UpdateBadge } from './update-badge'
 
 /**
@@ -65,6 +68,9 @@ export function ControlDock({
   layout
 }: ControlDockProps): JSX.Element {
   const [mixerOpen, setMixerOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
+  const transferState = useTransfers()
+  const transferActive = transferState.incoming.some((entry) => entry.state === 'offered')
 
   return (
     <div className={`tm-dock tm-dock--${layout}`}>
@@ -171,6 +177,20 @@ export function ControlDock({
         >
           {micOn ? <IconMic size={16} /> : <IconMicOff size={16} />}
         </button>
+        <div className="tm-dock__transfer">
+          <button
+            type="button"
+            className={`tm-dock__device${transferActive ? ' is-on' : ''}`}
+            onClick={() => setTransferOpen((open) => !open)}
+            aria-pressed={transferActive}
+            aria-expanded={transferOpen}
+            aria-label="Transferências"
+            title="Transferências"
+          >
+            <IconFile size={16} />
+          </button>
+          {transferOpen && <TransferPanel onClose={() => setTransferOpen(false)} />}
+        </div>
         <span className="tm-dock__devices-fill" />
       </div>
 

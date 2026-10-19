@@ -17,6 +17,7 @@
     "signal": "npm --prefix server run dev",
     "peer": "node scripts/peer.mjs",
     "icon": "node scripts/make-icon.mjs",
+    "transfer-check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/transfer-check.mjs",
     "release": "npm run build && electron-builder --win --publish always"
   },
   "dependencies": {
