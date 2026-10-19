@@ -189,7 +189,6 @@ export function ControlDock({
           >
             <IconFile size={16} />
           </button>
-          {transferOpen && <TransferPanel onClose={() => setTransferOpen(false)} />}
         </div>
         <span className="tm-dock__devices-fill" />
       </div>
@@ -220,6 +219,8 @@ export function ControlDock({
           Sair
         </button>
       </div>
+
+      {transferOpen && <TransferPanel onClose={() => setTransferOpen(false)} />}
 
       <UpdateBadge />
     </div>
