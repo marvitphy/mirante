@@ -153,6 +153,18 @@ Apps que carregam voz (`discord.exe`, `ts3client_win64.exe`, `teams.exe`,
 
 ---
 
+## Transferência de arquivo
+
+P2P pela mesma conexão da sala: quem manda escolhe os arquivos, a sala tem
+15 segundos pra aceitar e os bytes vão direto da máquina de um pro disco do
+outro (Downloads, arquivo `.part` + rename, sha256 no final). O estado todo
+vive no painel do dock — nenhum toast, nenhum som, nenhuma janela nova.
+
+`npm run transfer-check` roda a lógica pura sem abrir o Electron.
+Detalhe do protocolo em `docs/transferencia-p2p.md`.
+
+---
+
 ## Servidor de sinalização
 
 ```bash

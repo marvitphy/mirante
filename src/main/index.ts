@@ -11,6 +11,7 @@ import {
 import { cancelPendingCapture, registerCapture } from './capture'
 import { startLogging } from './log'
 import { registerProcessAudio, stopProcessAudio } from './process-audio'
+import { registerTransferIpc } from './transfer'
 import { registerUpdaterIpc, startUpdater, stopUpdater } from './updater'
 
 /**
@@ -120,6 +121,7 @@ void app.whenReady().then(() => {
   registerWindowControls()
   registerCapture()
   registerProcessAudio(mainWindow)
+  registerTransferIpc()
   registerHotkeys()
   registerOverlay(mainWindow)
   ipcMain.handle('overlay:bind-shortcuts', (event, shortcuts: OverlayShortcuts) =>

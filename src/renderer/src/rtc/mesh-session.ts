@@ -5,6 +5,7 @@ import {
   type PeerPublishState,
   type RTCIceServerConfig,
   type ServerMessage,
+  type SignalLane,
   type SignalPayload,
   type StreamDir
 } from '../../../shared/protocol'
@@ -20,6 +21,7 @@ import {
 import { SCREEN_PROFILES, setContentHint, type ScreenProfileName } from './sdp'
 import { clientId } from '../lib/client-id'
 import { Signaling, type SignalingStatus } from './signaling'
+import { TransferManager } from './transfer'
 
 /**
  * How long a viewer link may stay down before we rebuild it from scratch.
@@ -209,6 +211,13 @@ export class MeshSession {
   private readonly mixer = new AudioMixer()
   private readonly listeners = new Set<Listener>()
 
+  readonly transfers = new TransferManager({
+    send: (to, payload) => this.send(to, 'xfer', payload),
+    peers: () => [...this.peers.values()].map((peer) => ({ id: peer.info.id, name: peer.info.name })),
+    iceServers: () => this.iceServers,
+    live: () => this.local.screen !== null || this.local.camera !== null
+  })
+
   private self: PeerInfo | null = null
   private status: SignalingStatus = 'idle'
   private error: string | null = null
@@ -315,6 +324,7 @@ export class MeshSession {
     }
     this.budgets.clear()
     this.streaks.clear()
+    this.transfers.closeAll()
     for (const link of this.allLinks()) link.close()
     this.publishers.clear()
     this.viewers.clear()
@@ -330,7 +340,7 @@ export class MeshSession {
 
   // --- signaling ----------------------------------------------------------
 
-  private send(to: string, dir: StreamDir, payload: SignalPayload): void {
+  private send(to: string, dir: SignalLane, payload: SignalPayload): void {
     this.signaling?.send({ t: 'signal', to, dir, payload })
   }
 
@@ -382,6 +392,7 @@ export class MeshSession {
   private dropLinks(peerId: string): void {
     this.cancelRejoin(peerId)
     this.cancelJoinRetry(peerId)
+    this.transfers.dropPeer(peerId)
     this.publishers.get(peerId)?.close()
     this.viewers.get(peerId)?.close()
     this.publishers.delete(peerId)
@@ -547,6 +558,10 @@ export class MeshSession {
       }
 
       case 'signal': {
+        if (message.dir === 'xfer') {
+          await this.transfers.handleSignal(message.from, message.payload)
+          break
+        }
         await this.handleSignal(message.from, message.dir, message.payload)
         break
       }
