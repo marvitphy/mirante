@@ -242,6 +242,27 @@ export function micDeviceId(): string {
   return chain?.raw.getAudioTracks()[0]?.getSettings().deviceId ?? ''
 }
 
+/**
+ * Hear yourself, exactly as everyone else hears you.
+ *
+ * Tapped after the whole chain, so it carries the level and the noise
+ * reduction rather than the raw capture — there is no point auditioning a
+ * signal nobody receives.
+ *
+ * This is not a nicety. The one thing a person cannot do is hear their own
+ * microphone, which is why "nobody can tell the difference" was the honest
+ * report about a setting that genuinely does something: there was no way to
+ * check. Every mixing desk ever built has this button.
+ *
+ * Echo cancellation is on, so speakers are survivable, but headphones are
+ * still the sane way to use it.
+ */
+export function setMonitor(on: boolean): void {
+  if (!chain) return
+  if (on) chain.analyser.connect(chain.context.destination)
+  else chain.analyser.disconnect(chain.context.destination)
+}
+
 /** Your own input level, 0..2. Above 1 is a boost for a quiet microphone. */
 export function setMicGain(gain: number): void {
   if (!chain) return
@@ -280,6 +301,13 @@ export function closeMic(): void {
   // outgoing track leaves it running and invisible.
   for (const track of chain.raw.getTracks()) track.stop()
   for (const track of chain.out.getTracks()) track.stop()
+  // Before the context goes: a monitor left connected to a closed context
+  // is not a leak, but disconnecting is how this stays easy to reason about.
+  try {
+    chain.analyser.disconnect(chain.context.destination)
+  } catch {
+    // Not connected. Nothing to undo.
+  }
   chain.source.disconnect()
   chain.gain.disconnect()
   chain.rnnoise?.disconnect()

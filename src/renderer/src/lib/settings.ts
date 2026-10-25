@@ -110,7 +110,7 @@ export const DEFAULT_SETTINGS: Settings = {
   microphoneId: '',
   speakerId: '',
   masterVolume: 1,
-  noiseSuppression: 'standard',
+  noiseSuppression: 'strong',
   micGain: 1,
   roomSounds: true,
   defaultProfile: 'smooth',

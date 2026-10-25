@@ -41,6 +41,73 @@ export type CodecContent = 'motion' | 'detail'
  * about AV1 made any difference to a single frame. Failures are logged now,
  * because a preference that quietly does nothing is worse than none at all.
  */
+/**
+ * Put Opus RED in front of plain Opus on a voice transceiver.
+ *
+ * Chromium already offers it — `a=rtpmap:63 red/48000/2` with
+ * `a=fmtp:63 111/111` — and never uses it, because the m-line lists opus
+ * first and the first payload wins. RED (RFC 2198) carries a copy of the
+ * PREVIOUS packet inside the current one, so losing any single packet costs
+ * nothing at all: the next one already contains it.
+ *
+ * That is the difference between a voice that survives a flaky link and one
+ * that arrives in pieces. In-band FEC, which we already ask for, only helps
+ * when the encoder decided to spend bits on it and the loss pattern suits
+ * it; RED is unconditional.
+ *
+ * The price is roughly double the audio bitrate — 96 kbit/s becomes about
+ * 190 — against a video stream measured in megabits. It is not a real
+ * price.
+ *
+ * Only for voice. Screen audio is already stereo at 320k and doubling that
+ * to protect a soundtrack is the wrong trade; a dropout in music is a
+ * glitch, a dropout in speech is a word nobody heard.
+ */
+export function preferRed(transceiver: RTCRtpTransceiver): void {
+  if (typeof RTCRtpReceiver.getCapabilities !== 'function') return
+  const capabilities = RTCRtpReceiver.getCapabilities('audio')
+  if (!capabilities) return
+
+  const red = capabilities.codecs.filter((c) => c.mimeType.toLowerCase() === 'audio/red')
+  if (red.length === 0) return
+
+  try {
+    transceiver.setCodecPreferences([
+      ...red,
+      ...capabilities.codecs.filter((c) => c.mimeType.toLowerCase() !== 'audio/red')
+    ])
+  } catch (error) {
+    console.warn('[rtc] RED recusado:', (error as Error).message)
+  }
+}
+
+/**
+ * Tell Chromium this stream is the one that matters.
+ *
+ * Audio senders default to `networkPriority: 'low'` — measured, not assumed
+ * — which is the same priority the screen share has while asking for twenty
+ * megabits on the same transport. The allocator has no reason to protect
+ * speech over pixels unless it is told.
+ *
+ * Honest about the size of this: the DSCP marking it also sets is mostly
+ * inert on a home network with no QoS policy. The part that acts is
+ * Chromium's own bitrate allocator, which reserves for high-priority
+ * streams first. Cheap, sender-local, works against friends on any version.
+ */
+export async function prioritiseVoice(sender: RTCRtpSender): Promise<void> {
+  const params = sender.getParameters()
+  if (!params.encodings || params.encodings.length === 0) params.encodings = [{}]
+  for (const encoding of params.encodings) {
+    encoding.priority = 'high'
+    encoding.networkPriority = 'high'
+  }
+  try {
+    await sender.setParameters(params)
+  } catch (error) {
+    console.warn('[rtc] prioridade de voz recusada:', (error as Error).message)
+  }
+}
+
 export function preferCodecs(transceiver: RTCRtpTransceiver, content: CodecContent): void {
   if (typeof RTCRtpReceiver.getCapabilities !== 'function') return
   const capabilities = RTCRtpReceiver.getCapabilities('video')

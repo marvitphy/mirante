@@ -8,6 +8,7 @@ import {
   formatResolution
 } from '../lib/format'
 import type { PeerView } from '../rtc/mesh-session'
+import type { BroadcastLoad } from '../rtc/peer-link'
 import {
   IconCollapse,
   IconExpand,
@@ -39,6 +40,15 @@ export type ViewMode = 'normal' | 'theater' | 'fullscreen'
 
 interface StageProps {
   peer: PeerView | null
+  /**
+   * What your own broadcast is costing this machine.
+   *
+   * Telemetry used to be for watching someone else: `showingLocal` set the
+   * stats to undefined, so the person whose CPU was actually doing the work
+   * was the one person with no instrument. "Sharing the game drops my
+   * frames" was a report nobody could check.
+   */
+  load: BroadcastLoad
   /** Local preview, shown when nobody else is publishing. */
   localScreen: MediaStream | null
   /** How many people have your broadcast open, when the broadcast is yours. */
@@ -62,6 +72,7 @@ interface StageProps {
 
 export function Stage({
   peer,
+  load,
   localScreen,
   watchers,
   mode,
@@ -224,7 +235,7 @@ export function Stage({
             </button>
           )}
 
-          {stats && (
+          {(stats || showingLocal) && (
             <button
               type="button"
               className={`tm-iconbtn${showStats ? ' is-active' : ''}`}
@@ -238,6 +249,40 @@ export function Stage({
         </div>
       </div>
 
+      {showStats && showingLocal && (
+        <aside className="tm-stats" aria-label="Custo da sua transmissão">
+          <Row
+            label="codificação"
+            value={
+              load.encodeMsPerFrame > 0 ? `${load.encodeMsPerFrame.toFixed(1)} ms/quadro` : '—'
+            }
+            // A frame at 60 fps is 16.7 ms of wall clock. Spending more than
+            // half of that compressing it is the encoder running out of room.
+            warn={load.encodeMsPerFrame > 8}
+          />
+          {/* Only while the CPU is the one doing it. In hardware the figure
+              behind this is wait time for a chip that is not the CPU, and
+              printing it as cores would invent load that does not exist. */}
+          <Row
+            label={load.hardware ? 'onde' : 'núcleos'}
+            value={load.hardware ? 'placa de vídeo' : load.cores > 0 ? load.cores.toFixed(2) : '—'}
+            warn={!load.hardware && load.cores > 1}
+          />
+          <Row
+            label="encoders"
+            value={load.encoders > 0 ? `${load.encoders}` : '—'}
+            // One per viewer, and nothing shares work between them.
+            warn={load.encoders > 2}
+          />
+          <Row label="encoder" value={load.encoderImpl || '—'} />
+          <Row
+            label="limite"
+            value={load.cpuBound ? 'CPU' : '—'}
+            warn={load.cpuBound}
+          />
+        </aside>
+      )}
+
       {showStats && stats && (
         <aside className="tm-stats" aria-label="Telemetria da transmissão">
           <Row label="latência" value={formatMs(stats.rttMs)} />
@@ -247,6 +292,18 @@ export function Stage({
           <Row label="perda" value={formatLoss(stats.lossRatio)} />
           <Row label="jitter" value={formatMs(stats.jitterMs)} />
           <Row label="codec" value={stats.codec || '—'} />
+          {/* How much of their voice the receiver had to invent. Above a few
+              percent is audible as interference; above ten it is the thing
+              people describe as a voice breaking up. */}
+          <Row
+            label="voz"
+            value={
+              stats.voiceConcealed > 0
+                ? `${(stats.voiceConcealed * 100).toFixed(1)}% reconstruída`
+                : '—'
+            }
+            warn={stats.voiceConcealed > 0.03}
+          />
           <Row
             label="limite"
             value={LIMITATION_LABELS[stats.limitation]}

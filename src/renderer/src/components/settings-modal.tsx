@@ -10,7 +10,7 @@ import {
   type DeviceList
 } from '../lib/settings'
 import { formatVolume } from '../lib/format'
-import { micLevel, type NoiseSuppression } from '../rtc/mic-chain'
+import { micLevel, setMonitor } from '../rtc/mic-chain'
 import { SCREEN_PROFILES, type ScreenProfileName } from '../rtc/sdp'
 import { IconClose } from './icons'
 import { ShortcutField } from './shortcut-field'
@@ -74,6 +74,17 @@ export function SettingsModal({
 }: SettingsModalProps): JSX.Element {
   const settings = useSettings()
   const [tab, setTab] = useState<TabId>('devices')
+  /**
+   * Monitoring is not a saved preference. Leaving the modal with your own
+   * voice still in your ears, and no visible control to stop it, would be
+   * a trap — so it dies with the dialog.
+   */
+  const [monitoring, setMonitoringState] = useState(false)
+  const setMonitoring = (on: boolean): void => {
+    setMonitoringState(on)
+    setMonitor(on)
+  }
+  useEffect(() => () => setMonitor(false), [])
   const background = activeBackground(settings, useCustomBackground())
   const [devices, setDevices] = useState<DeviceList>({
     cameras: [],
@@ -251,21 +262,30 @@ export function SettingsModal({
 
                 <MicMeter />
 
-                {/* A select, like the three device rows directly above it.
-                    Segmented buttons here would be a fourth control shape in
-                    one short column, and the question — pick one of three —
-                    is the same question those rows already ask. */}
+                {/* One switch, not three levels.
+                    Three was wrong twice over: nobody could tell two of them
+                    apart, and asking someone to choose between methods they
+                    cannot hear is asking them to guess. The question people
+                    actually have is whether the room should be audible. */}
                 <Row
-                  label="Redução de ruído"
-                  hint={NOISE_HINTS[settings.noiseSuppression]}
+                  label="Reduzir ruído do ambiente"
+                  hint="Corta teclado, ventilador, TV e gente falando atrás, sem cortar você."
                 >
-                  <Picker
-                    value={settings.noiseSuppression}
-                    onChange={(value) =>
-                      updateSettings({ noiseSuppression: value as NoiseSuppression })
+                  <Toggle
+                    checked={settings.noiseSuppression === 'strong'}
+                    onChange={(on) =>
+                      updateSettings({ noiseSuppression: on ? 'strong' : 'standard' })
                     }
-                    options={NOISE_LEVELS}
                   />
+                </Row>
+
+                {/* And the way to judge it. A switch whose effect you cannot
+                    hear is a switch you have no reason to trust. */}
+                <Row
+                  label="Ouvir meu microfone"
+                  hint="Você se escuta exatamente como os outros escutam. Use fone."
+                >
+                  <Toggle checked={monitoring} onChange={setMonitoring} />
                 </Row>
               </Group>
 
@@ -420,25 +440,6 @@ export function SettingsModal({
       </div>
     </div>
   )
-}
-
-const NOISE_LEVELS: Array<{ value: NoiseSuppression; label: string }> = [
-  { value: 'off', label: 'Nenhuma' },
-  { value: 'standard', label: 'Padrão' },
-  { value: 'strong', label: 'Forte' }
-]
-
-/**
- * What each level actually does, in the words of the problem it solves.
- *
- * "Padrão" and "Forte" are not two strengths of the same thing — they are
- * two different methods, and which one is right depends on what is making
- * the noise, not on how much of it there is.
- */
-const NOISE_HINTS: Record<NoiseSuppression, string> = {
-  off: 'Sem tratamento e sem ganho automático. Para quem já trata a voz fora do Mirante.',
-  standard: 'Remove o ruído constante do ambiente: ventilador, ar, chiado.',
-  strong: 'Também corta teclado, cadeira, TV e gente falando atrás. Usa um pouco mais de CPU.'
 }
 
 /**

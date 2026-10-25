@@ -26,6 +26,7 @@ import {
 import { useAutoHide } from './lib/use-auto-hide'
 import { useHotkeys } from './lib/use-hotkeys'
 import { CameraFeed, type SelfView } from './rtc/camera-background'
+import { broadcastLoad } from './rtc/peer-link'
 import {
   closeMic,
   micDeviceId,
@@ -617,6 +618,78 @@ export function App(): JSX.Element {
   }, [focusedPeer, snapshot.local.screen, snapshot.peers])
 
   const watched = stage.watched
+
+  // Summed across every link, because in a mesh each viewer gets their own
+  // encoder and no one link can see the total.
+  const broadcast = useMemo(
+    () => broadcastLoad(snapshot.peers.map((peer) => peer.stats)),
+    [snapshot.peers]
+  )
+
+  /**
+   * Write the cost of the broadcast to the log while it is running.
+   *
+   * The panel behind D cannot be read during the measurement that matters:
+   * the game is fullscreen, Mirante is behind it, and alt-tabbing out
+   * changes the very thing being measured — Chromium throttles an occluded
+   * renderer, and the frames stop being the frames the game was fighting
+   * for. So the app records its own cost and the log is read afterwards.
+   *
+   * The renderer's console is mirrored into mirante.log by the main
+   * process, so `console.info` is the whole mechanism.
+   */
+  const loadRef = useRef(broadcast)
+  loadRef.current = broadcast
+
+  /**
+   * Record how everyone's VOICE is arriving, whether or not anything is
+   * being broadcast.
+   *
+   * Separate from the broadcast log on purpose: "a voz do fulano quebra"
+   * happens in a room with no screen share at all, and a diagnostic that
+   * only runs while sharing would miss the case people complain about most.
+   *
+   * Concealment is the measurement. One friend reconstructed on everybody's
+   * machine is his uplink; reconstructed on one machine only is that
+   * listener's downlink. Nothing else separates those two.
+   */
+  const peersRef = useRef(snapshot.peers)
+  peersRef.current = snapshot.peers
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const rough = peersRef.current.filter((peer) => peer.stats.voiceConcealed > 0.01)
+      if (rough.length === 0) return
+      console.info(
+        '[voz] ' +
+          rough
+            .map(
+              (peer) =>
+                `${peer.info.name}=${(peer.stats.voiceConcealed * 100).toFixed(1)}%` +
+                ` perda=${(peer.stats.voiceLoss * 100).toFixed(1)}%` +
+                ` buffer=${peer.stats.voiceBufferMs}ms`
+            )
+            .join(' ')
+      )
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [])
+  useEffect(() => {
+    if (!snapshot.local.screen) return
+    const tick = (): void => {
+      const load = loadRef.current
+      if (load.encoders === 0) return
+      console.info(
+        `[load] encoders=${load.encoders} ` +
+          `ms/quadro=${load.encodeMsPerFrame.toFixed(1)} ` +
+          `nucleos=${load.hardware ? 'hardware' : load.cores.toFixed(2)} ` +
+          `limite=${load.cpuBound ? 'cpu' : '-'} ` +
+          `encoder=${load.encoderImpl || '?'}`
+      )
+    }
+    tick()
+    const id = window.setInterval(tick, 5000)
+    return () => window.clearInterval(id)
+  }, [snapshot.local.screen])
   const gridded = stage.kind === 'grid'
 
   /**
@@ -822,6 +895,7 @@ export function App(): JSX.Element {
         ) : (
         <Stage
           peer={stage.peer}
+          load={broadcast}
           watchers={snapshot.local.watchers}
           siblings={watched.length}
           onBackToGrid={() => session.focus(null)}
