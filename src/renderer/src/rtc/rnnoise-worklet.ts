@@ -34,6 +34,39 @@ const FRAME = 480
  */
 const SCALE = 32768
 
+/**
+ * How much of the original survives while someone is SPEAKING.
+ *
+ * Raw RNNoise applies the same suppression to speech as to silence, and on
+ * a voice that reads as a processed, slightly underwater quality — the
+ * "corta demais" half of the complaint. Noise riding under a voice is
+ * perceptually masked by the voice anyway, so there is little to win there
+ * and real naturalness to lose. Commercial suppressors all back off during
+ * speech for this reason.
+ */
+const SPEECH_DRY = 0.18
+
+/**
+ * What is left between words.
+ *
+ * Not zero. Absolute digital silence between words is not what a quiet room
+ * sounds like, and the ear reads the gap itself as the line cutting out —
+ * which is the other half of the same complaint. A floor this far down is
+ * inaudible as noise and audible as presence.
+ */
+const NOISE_FLOOR = 0.015
+
+/**
+ * Asymmetric smoothing on the voice-activity probability.
+ *
+ * Fast to open, slow to close. A slow attack eats the consonant that starts
+ * a word — exactly the sound that carries intelligibility — while a fast
+ * release chops the tail off every sentence and pumps between syllables.
+ * These are per 10 ms frame.
+ */
+const VAD_ATTACK = 0.6
+const VAD_RELEASE = 0.05
+
 interface RnnModule {
   HEAPF32: Float32Array
   _malloc: (bytes: number) => number
@@ -53,6 +86,12 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
   private readonly pending = new Float32Array(FRAME)
   private pendingLength = 0
 
+  /** The same frame before denoising, for the speech blend. */
+  private readonly dry = new Float32Array(FRAME)
+
+  /** Smoothed voice-activity probability, 0..1. */
+  private speech = 0
+
   /**
    * Processed samples waiting to be handed out 128 at a time.
    *
@@ -61,7 +100,15 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
    * more than it adds, so this only has to absorb the 480-vs-128 mismatch.
    */
   private readonly ready = new Float32Array(FRAME * 4)
-  private readyLength = 0
+  /**
+   * Start one frame ahead, on silence.
+   *
+   * The cushion has to come from somewhere, and without this it is taken
+   * out of the first fifth of a second of speech: measured, a 992-sample
+   * gap at the very start of every stream. `ready` is already zeroed, so
+   * claiming a frame of it costs one constant 10 ms of latency instead.
+   */
+  private readyLength = FRAME
 
   private enabled = true
 
@@ -115,12 +162,34 @@ class RnnoiseProcessor extends AudioWorkletProcessor {
     return true
   }
 
+  /**
+   * Denoise one frame, and decide how hard to apply it.
+   *
+   * The network returns a voice-activity probability alongside the cleaned
+   * audio, and using it to vary the amount is the difference between a
+   * suppressor people turn off and one they forget is on. Full strength
+   * between words, eased off over a voice.
+   */
   private denoise(): void {
     const heap = this.rnn.HEAPF32
-    for (let i = 0; i < FRAME; i++) heap[this.offset + i] = this.pending[i] * SCALE
-    this.rnn._rnnoise_process_frame(this.state, this.ptr, this.ptr)
     for (let i = 0; i < FRAME; i++) {
-      this.ready[this.readyLength + i] = heap[this.offset + i] / SCALE
+      this.dry[i] = this.pending[i]
+      heap[this.offset + i] = this.pending[i] * SCALE
+    }
+
+    const vad = this.rnn._rnnoise_process_frame(this.state, this.ptr, this.ptr)
+    const rate = vad > this.speech ? VAD_ATTACK : VAD_RELEASE
+    this.speech += (vad - this.speech) * rate
+
+    // Between words the floor is all that is left of the room; over a voice
+    // a fifth of the original comes back, which is what keeps breath and
+    // consonants from sounding synthesised.
+    const dryMix = NOISE_FLOOR + (SPEECH_DRY - NOISE_FLOOR) * this.speech
+    const wetMix = 1 - dryMix * this.speech
+
+    for (let i = 0; i < FRAME; i++) {
+      this.ready[this.readyLength + i] =
+        (heap[this.offset + i] / SCALE) * wetMix + this.dry[i] * dryMix
     }
     this.readyLength += FRAME
   }

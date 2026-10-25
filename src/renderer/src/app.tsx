@@ -640,6 +640,39 @@ export function App(): JSX.Element {
    */
   const loadRef = useRef(broadcast)
   loadRef.current = broadcast
+
+  /**
+   * Record how everyone's VOICE is arriving, whether or not anything is
+   * being broadcast.
+   *
+   * Separate from the broadcast log on purpose: "a voz do fulano quebra"
+   * happens in a room with no screen share at all, and a diagnostic that
+   * only runs while sharing would miss the case people complain about most.
+   *
+   * Concealment is the measurement. One friend reconstructed on everybody's
+   * machine is his uplink; reconstructed on one machine only is that
+   * listener's downlink. Nothing else separates those two.
+   */
+  const peersRef = useRef(snapshot.peers)
+  peersRef.current = snapshot.peers
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const rough = peersRef.current.filter((peer) => peer.stats.voiceConcealed > 0.01)
+      if (rough.length === 0) return
+      console.info(
+        '[voz] ' +
+          rough
+            .map(
+              (peer) =>
+                `${peer.info.name}=${(peer.stats.voiceConcealed * 100).toFixed(1)}%` +
+                ` perda=${(peer.stats.voiceLoss * 100).toFixed(1)}%` +
+                ` buffer=${peer.stats.voiceBufferMs}ms`
+            )
+            .join(' ')
+      )
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [])
   useEffect(() => {
     if (!snapshot.local.screen) return
     const tick = (): void => {

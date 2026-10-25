@@ -6,6 +6,8 @@ import {
   MEDIA_OPUS,
   VOICE_OPUS,
   preferCodecs,
+  preferRed,
+  prioritiseVoice,
   setContentHint,
   SCREEN_PROFILES,
   type ScreenProfileName
@@ -63,6 +65,26 @@ export interface LinkStats {
    * capture permission, which is why a synthetic probe cannot answer the
    * question and a real broadcast can.
    */
+  /**
+   * How much of this person's VOICE had to be invented, 0..1.
+   *
+   * Straight from NetEq, as `concealedSamples` over the samples it emitted.
+   * When a packet does not arrive in time the receiver does not fall
+   * silent — it fabricates something plausible from what came before, and
+   * that fabrication is what people describe as interference, robot voice,
+   * or a voice breaking up. So this is not a proxy for the complaint. It is
+   * the complaint, counted.
+   *
+   * It also says WHOSE problem it is. One friend concealed on everybody's
+   * screen is his uplink; concealed on one screen only is that listener's
+   * downlink. Nothing else in the telemetry can tell those apart, which is
+   * why "a voz do fulano quebra" has never had an answer.
+   */
+  voiceConcealed: number
+  /** Packets of their voice that never arrived, 0..1 over the window. */
+  voiceLoss: number
+  /** How deep the receiver is buffering their voice, milliseconds. */
+  voiceBufferMs: number
   encoderImpl: string
   /**
    * Whether that encoder is dedicated silicon rather than the CPU.
@@ -104,6 +126,9 @@ export const EMPTY_STATS: LinkStats = {
   jitterMs: 0,
   codec: '',
   encodeMsPerFrame: 0,
+  voiceConcealed: 0,
+  voiceLoss: 0,
+  voiceBufferMs: 0,
   encoderImpl: '',
   powerEfficient: false,
   candidateType: '',
@@ -254,6 +279,11 @@ interface StatsCursor {
   encodeSeconds: number
   /** Frames the ENCODER produced, kept apart from decoded ones. */
   encodedFrames: number
+  /** NetEq counters for the incoming voice, cumulative. */
+  concealed: number
+  voiceSamples: number
+  voicePackets: number
+  voiceLost: number
   at: number
 }
 
@@ -465,6 +495,12 @@ export class PeerLink {
       this.slots.set(slot.name, transceiver)
       if (slot.kind === 'video') {
         preferCodecs(transceiver, slot.name === 'camera' ? 'motion' : screenContent)
+      }
+      // The microphone, and only the microphone. Redundancy and priority are
+      // for the thing people are trying to hear each other say.
+      if (slot.name === 'mic') {
+        preferRed(transceiver)
+        void prioritiseVoice(transceiver.sender)
       }
     }
   }
@@ -679,6 +715,10 @@ export class PeerLink {
     let frames = 0
     let encodeSeconds = 0
     let encodedFrames = 0
+    let concealed = 0
+    let voiceSamples = 0
+    let voicePackets = 0
+    let voiceLost = 0
     const codecIds = new Set<string>()
 
     // Pass 1: media counters, and the id of the pair actually carrying them.
@@ -702,6 +742,22 @@ export class PeerLink {
         if (reason === 'cpu' || reason === 'bandwidth' || reason === 'other') {
           next.limitation = reason
         }
+      }
+      // The microphone section only. Screen audio shares this type and is a
+      // different question: a gap in music is a glitch, a gap in speech is a
+      // word nobody heard, and averaging them hides the one that matters.
+      if (
+        entry.type === 'inbound-rtp' &&
+        entry.kind === 'audio' &&
+        VOICE_MIDS.includes(String(entry.mid ?? ''))
+      ) {
+        concealed += (entry.concealedSamples as number) ?? 0
+        voiceSamples += (entry.totalSamplesReceived as number) ?? 0
+        voicePackets += (entry.packetsReceived as number) ?? 0
+        voiceLost += (entry.packetsLost as number) ?? 0
+        const delay = (entry.jitterBufferDelay as number) ?? 0
+        const emitted = (entry.jitterBufferEmittedCount as number) ?? 0
+        if (emitted > 0) next.voiceBufferMs = Math.round((delay / emitted) * 1000)
       }
       if (entry.type === 'inbound-rtp' && entry.kind === 'video') {
         bytes += (entry.bytesReceived as number) ?? 0
@@ -780,13 +836,44 @@ export class PeerLink {
         const deltaEncode = encodeSeconds - this.cursor.encodeSeconds
         next.encodeMsPerFrame = Math.max(0, (deltaEncode * 1000) / deltaFrames)
       }
+
+      // Over the window, never cumulative: a session that was rough for its
+      // first minute and perfect since would read as permanently rough, and
+      // the number is meant to answer "how is it right now".
+      const deltaVoice = voiceSamples - this.cursor.voiceSamples
+      if (deltaVoice > 0) {
+        next.voiceConcealed = Math.min(
+          1,
+          Math.max(0, (concealed - this.cursor.concealed) / deltaVoice)
+        )
+      }
+      const deltaVoicePackets = voicePackets - this.cursor.voicePackets
+      const deltaVoiceLost = voiceLost - this.cursor.voiceLost
+      if (deltaVoicePackets + deltaVoiceLost > 0) {
+        next.voiceLoss = Math.max(
+          0,
+          deltaVoiceLost / (deltaVoicePackets + deltaVoiceLost)
+        )
+      }
     }
 
     // Carry the previous measurement rather than reporting a gap.
     if (next.rttMs > 0) this.lastRtt = next.rttMs
     else next.rttMs = this.lastRtt
 
-    this.cursor = { bytes, packets, lost, frames, encodeSeconds, encodedFrames, at: now }
+    this.cursor = {
+      bytes,
+      packets,
+      lost,
+      frames,
+      encodeSeconds,
+      encodedFrames,
+      concealed,
+      voiceSamples,
+      voicePackets,
+      voiceLost,
+      at: now
+    }
     this.latest = next
     this.options.onStats(next)
   }

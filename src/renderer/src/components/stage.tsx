@@ -292,6 +292,18 @@ export function Stage({
           <Row label="perda" value={formatLoss(stats.lossRatio)} />
           <Row label="jitter" value={formatMs(stats.jitterMs)} />
           <Row label="codec" value={stats.codec || '—'} />
+          {/* How much of their voice the receiver had to invent. Above a few
+              percent is audible as interference; above ten it is the thing
+              people describe as a voice breaking up. */}
+          <Row
+            label="voz"
+            value={
+              stats.voiceConcealed > 0
+                ? `${(stats.voiceConcealed * 100).toFixed(1)}% reconstruída`
+                : '—'
+            }
+            warn={stats.voiceConcealed > 0.03}
+          />
           <Row
             label="limite"
             value={LIMITATION_LABELS[stats.limitation]}
