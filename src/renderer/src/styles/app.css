@@ -577,3 +577,62 @@
 .tm-shell--theater.tm-shell--rail-right .tm-dock {
   grid-column: 1 / -1;
 }
+
+/* What is left when the interface falls over. Deliberately plain: it has to
+   render with no app state, no fonts guaranteed loaded, and no assumption
+   that anything else on this page still works. */
+.tm-crash {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--s-6);
+  background: var(--surface-0);
+  -webkit-app-region: drag;
+}
+
+.tm-crash__card {
+  max-width: 420px;
+  text-align: center;
+  -webkit-app-region: no-drag;
+}
+
+.tm-crash__card h1 {
+  font-size: var(--text-lg);
+  margin-bottom: var(--s-2);
+}
+
+.tm-crash__card p {
+  color: var(--text-secondary);
+  margin-bottom: var(--s-4);
+}
+
+.tm-crash__card button {
+  padding: var(--s-2) var(--s-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--surface-0);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tm-crash__detail {
+  margin-top: var(--s-5);
+  padding: var(--s-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-nano);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.tm-crash__hint {
+  margin-top: var(--s-2);
+  font-size: var(--text-nano);
+  color: var(--text-tertiary);
+}

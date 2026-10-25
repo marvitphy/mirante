@@ -82,6 +82,16 @@ interface Chain {
   destination: MediaStreamAudioDestinationNode
   raw: MediaStream
   out: MediaStream
+  /**
+   * Whether the monitor tap is currently wired to the speakers.
+   *
+   * Tracked rather than inferred. `AudioNode.disconnect(node)` THROWS
+   * `InvalidAccessError` when the two were never connected, so "just
+   * disconnect, it is harmless" is false — and the throw happened inside a
+   * React cleanup, which takes the whole tree down with it. Closing the
+   * settings dialog without touching the monitor blacked out the app.
+   */
+  monitoring: boolean
   buffer: Float32Array<ArrayBuffer>
 }
 
@@ -173,6 +183,7 @@ export async function openMic(
     destination,
     raw,
     out,
+    monitoring: false,
     buffer: new Float32Array(analyser.fftSize)
   }
 
@@ -258,9 +269,10 @@ export function micDeviceId(): string {
  * still the sane way to use it.
  */
 export function setMonitor(on: boolean): void {
-  if (!chain) return
+  if (!chain || chain.monitoring === on) return
   if (on) chain.analyser.connect(chain.context.destination)
   else chain.analyser.disconnect(chain.context.destination)
+  chain.monitoring = on
 }
 
 /** Your own input level, 0..2. Above 1 is a boost for a quiet microphone. */
@@ -301,13 +313,7 @@ export function closeMic(): void {
   // outgoing track leaves it running and invisible.
   for (const track of chain.raw.getTracks()) track.stop()
   for (const track of chain.out.getTracks()) track.stop()
-  // Before the context goes: a monitor left connected to a closed context
-  // is not a leak, but disconnecting is how this stays easy to reason about.
-  try {
-    chain.analyser.disconnect(chain.context.destination)
-  } catch {
-    // Not connected. Nothing to undo.
-  }
+  if (chain.monitoring) chain.analyser.disconnect(chain.context.destination)
   chain.source.disconnect()
   chain.gain.disconnect()
   chain.rnnoise?.disconnect()
