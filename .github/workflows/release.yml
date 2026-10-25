@@ -106,33 +106,52 @@ jobs:
           MIRANTE_SIGNAL_URL: ${{ vars.MIRANTE_SIGNAL_URL }}
         run: npm run release
 
-      # electron-builder reported success on v0.1.40 having uploaded only the
-      # blockmap: no installer, and no latest.yml, so every installed copy
-      # polled a 404 and nobody could update. A publisher that half-finishes
-      # and exits zero is worse than one that fails, because nothing tells
-      # you. The release is not done until the three files are actually
-      # there, so check, and put up whatever is missing.
+      # electron-builder reported success on v0.1.40 having uploaded only
+      # the blockmap: no installer, and no latest.yml, so every installed
+      # copy polled a 404 and nobody could update. A publisher that
+      # half-finishes and exits zero is worse than one that fails, because
+      # nothing tells you. So the release is not done until the files are
+      # actually there.
+      #
+      # Only two of them are load-bearing. `latest.yml` is what installed
+      # copies poll and the installer is what they then fetch; without
+      # either, updating is broken for everyone. The blockmap serves
+      # differential downloads, which this app disables outright
+      # (updater.ts), so a missing one is worth a warning and not worth
+      # failing a release that otherwise works.
       - name: Make sure the release really has its files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = "v$((Get-Content package.json | ConvertFrom-Json).version)"
-          $want = @(
-            "Mirante-$((Get-Content package.json | ConvertFrom-Json).version)-x64.exe",
-            "Mirante-$((Get-Content package.json | ConvertFrom-Json).version)-x64.exe.blockmap",
-            "latest.yml"
-          )
-          $have = (gh release view $tag --json assets -q '.assets[].name') -split "`n"
-          $missing = $want | Where-Object { $_ -notin $have }
-          if ($missing) {
-            Write-Host "faltando: $($missing -join ', ') — subindo de novo"
-            $paths = $missing | ForEach-Object { Join-Path dist $_ }
-            gh release upload $tag @paths --clobber
-          }
-          # Re-read, and fail loudly if anything is still absent.
-          $have = (gh release view $tag --json assets -q '.assets[].name') -split "`n"
-          $still = $want | Where-Object { $_ -notin $have }
-          if ($still) { throw "release $tag incompleta: $($still -join ', ')" }
-          Write-Host "release $tag completa"
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tag = "v$version"
+          $required = @("Mirante-$version-x64.exe", "latest.yml")
+          $optional = @("Mirante-$version-x64.exe.blockmap")
 
+          function Get-Assets { ,@(gh release view $tag --json assets -q '.assets[].name') }
+
+          $have = Get-Assets
+          $missing = @($required + $optional | Where-Object { $_ -notin $have })
+          foreach ($name in $missing) {
+            $path = Join-Path dist $name
+            if (-not (Test-Path $path)) {
+              Write-Host "::warning::$name nao foi gerado em dist, nada a subir"
+              continue
+            }
+            Write-Host "faltando no release: $name — subindo"
+            # No @ sigil: splatting a single string enumerates its CHARACTERS,
+            # and gh received "d" as a path. Native commands take arrays as-is.
+            gh release upload $tag $path --clobber
+          }
+
+          $have = Get-Assets
+          $stillRequired = @($required | Where-Object { $_ -notin $have })
+          $stillOptional = @($optional | Where-Object { $_ -notin $have })
+          foreach ($name in $stillOptional) {
+            Write-Host "::warning::$name ausente; download diferencial esta desligado, segue"
+          }
+          if ($stillRequired.Count -gt 0) {
+            throw "release $tag nao da para instalar, falta: $($stillRequired -join ', ')"
+          }
+          Write-Host "release $tag completa o bastante para atualizar"
