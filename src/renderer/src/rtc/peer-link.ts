@@ -42,6 +42,38 @@ export interface LinkStats {
   lossRatio: number
   jitterMs: number
   codec: string
+  /**
+   * Milliseconds of CPU spent encoding each frame, on THIS link.
+   *
+   * The number that settles whether sharing a game costs frames. At 60 fps
+   * a frame is 16.7 ms of wall clock, and in a mesh every viewer gets their
+   * own encoder — so this figure times the number of people watching is
+   * roughly how much of a core the broadcast is taking away from the game.
+   *
+   * `qualityLimitationReason: 'cpu'` already said the encoder was behind.
+   * It could not say by how much, or whether the work was happening on
+   * silicon built for it.
+   */
+  encodeMsPerFrame: number
+  /**
+   * Which encoder is doing it, straight from Chromium.
+   *
+   * Software reads as `libvpx` or `OpenH264`; hardware names the accelerator
+   * instead. Chromium withholds this field unless the page holds a live
+   * capture permission, which is why a synthetic probe cannot answer the
+   * question and a real broadcast can.
+   */
+  encoderImpl: string
+  /**
+   * Whether that encoder is dedicated silicon rather than the CPU.
+   *
+   * This decides what `encodeMsPerFrame` even MEANS. On a software encoder
+   * it is CPU time, and multiplying it by the frame rate gives a share of a
+   * core. On a hardware one it is mostly waiting for a chip that is not the
+   * CPU, so the same arithmetic would report cores being burned that nobody
+   * is burning.
+   */
+  powerEfficient: boolean
   /** 'host' when truly peer-to-peer, 'srflx' through NAT, 'relay' via TURN. */
   candidateType: string
   /** True when media is going through a TURN relay rather than direct. */
@@ -71,8 +103,74 @@ export const EMPTY_STATS: LinkStats = {
   lossRatio: 0,
   jitterMs: 0,
   codec: '',
+  encodeMsPerFrame: 0,
+  encoderImpl: '',
+  powerEfficient: false,
   candidateType: '',
   relayed: false
+}
+
+/**
+ * What your own broadcast is costing this machine.
+ *
+ * Derived rather than measured, because no single link knows it. A mesh
+ * gives every viewer their own PeerConnection and therefore their own
+ * encoder, so the cost of sharing a game grows with the number of people
+ * watching — and that is invisible in any one link's telemetry, which is
+ * exactly where someone would go looking for it.
+ */
+export interface BroadcastLoad {
+  /** How many encoders are running. One per person receiving your video. */
+  encoders: number
+  /** The worst per-frame cost among them, milliseconds. */
+  encodeMsPerFrame: number
+  /**
+   * Cores' worth of CPU spent encoding, summed across every viewer.
+   *
+   * ms per frame times frames per second is milliseconds of work per second
+   * of wall clock, which over a thousand is a fraction of one core. The
+   * number to put next to "my game lost frames".
+   *
+   * Zero when the encoding is happening in hardware, and that is not a
+   * missing measurement — the figure it is derived from stops being CPU
+   * time there. Reporting it anyway would invent load on a core that is
+   * free, which is the opposite of what this panel is for.
+   */
+  cores: number
+  /** True only while EVERY link is encoding on dedicated silicon. */
+  hardware: boolean
+  /** Chromium's name for the encoder. Empty until a broadcast is running. */
+  encoderImpl: string
+  /** True while any link reports the encoder, not the network, as the limit. */
+  cpuBound: boolean
+}
+
+export function broadcastLoad(samples: LinkStats[]): BroadcastLoad {
+  let cores = 0
+  let worst = 0
+  let encoderImpl = ''
+  let cpuBound = false
+  let encoders = 0
+  let onSilicon = 0
+
+  for (const stats of samples) {
+    if (stats.encodeMsPerFrame <= 0) continue
+    encoders++
+    if (stats.powerEfficient) onSilicon++
+    else cores += (stats.encodeMsPerFrame * stats.framerate) / 1000
+    if (stats.encodeMsPerFrame > worst) worst = stats.encodeMsPerFrame
+    if (stats.encoderImpl) encoderImpl = stats.encoderImpl
+    if (stats.limitation === 'cpu') cpuBound = true
+  }
+
+  return {
+    encoders,
+    encodeMsPerFrame: worst,
+    cores,
+    hardware: encoders > 0 && onSilicon === encoders,
+    encoderImpl,
+    cpuBound
+  }
 }
 
 export interface PeerLinkOptions {
@@ -152,6 +250,10 @@ interface StatsCursor {
   packets: number
   lost: number
   frames: number
+  /** Cumulative seconds Chromium reports for encoding, outbound video only. */
+  encodeSeconds: number
+  /** Frames the ENCODER produced, kept apart from decoded ones. */
+  encodedFrames: number
   at: number
 }
 
@@ -575,6 +677,8 @@ export class PeerLink {
     let packets = 0
     let lost = 0
     let frames = 0
+    let encodeSeconds = 0
+    let encodedFrames = 0
     const codecIds = new Set<string>()
 
     // Pass 1: media counters, and the id of the pair actually carrying them.
@@ -587,6 +691,12 @@ export class PeerLink {
         next.width = (entry.frameWidth as number) ?? next.width
         next.height = (entry.frameHeight as number) ?? next.height
         if (entry.codecId) codecIds.add(entry.codecId as string)
+        encodeSeconds += (entry.totalEncodeTime as number) ?? 0
+        encodedFrames += (entry.framesEncoded as number) ?? 0
+        if (typeof entry.encoderImplementation === 'string') {
+          next.encoderImpl = entry.encoderImplementation
+        }
+        if (entry.powerEfficientEncoder === true) next.powerEfficient = true
 
         const reason = entry.qualityLimitationReason as string | undefined
         if (reason === 'cpu' || reason === 'bandwidth' || reason === 'other') {
@@ -661,13 +771,22 @@ export class PeerLink {
         next.lossRatio =
           deltaPackets + deltaLost > 0 ? Math.max(0, deltaLost / (deltaPackets + deltaLost)) : 0
       }
+
+      // Per frame, not per second: a rate would fall when the encoder gives
+      // up and sends fewer frames, which is the moment the cost per frame is
+      // most worth seeing.
+      const deltaFrames = encodedFrames - this.cursor.encodedFrames
+      if (deltaFrames > 0) {
+        const deltaEncode = encodeSeconds - this.cursor.encodeSeconds
+        next.encodeMsPerFrame = Math.max(0, (deltaEncode * 1000) / deltaFrames)
+      }
     }
 
     // Carry the previous measurement rather than reporting a gap.
     if (next.rttMs > 0) this.lastRtt = next.rttMs
     else next.rttMs = this.lastRtt
 
-    this.cursor = { bytes, packets, lost, frames, at: now }
+    this.cursor = { bytes, packets, lost, frames, encodeSeconds, encodedFrames, at: now }
     this.latest = next
     this.options.onStats(next)
   }

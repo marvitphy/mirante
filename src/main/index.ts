@@ -9,7 +9,7 @@ import {
   type OverlayShortcuts
 } from './overlay'
 import { cancelPendingCapture, registerCapture } from './capture'
-import { startLogging } from './log'
+import { log, startLogging } from './log'
 import { registerProcessAudio, stopProcessAudio } from './process-audio'
 import { registerUpdaterIpc, startUpdater, stopUpdater } from './updater'
 
@@ -117,6 +117,30 @@ void app.whenReady().then(() => {
 
   mainWindow = createWindow()
   startLogging(mainWindow)
+
+  // AFTER the GPU process has actually reported, which takes around half a
+  // second. Asked inside `whenReady` this returns the pre-initialisation
+  // defaults — every feature `disabled_software` and no adapter active —
+  // which reads exactly like a machine with acceleration switched off and
+  // sent me chasing one that did not exist. `getGPUInfo('complete')`
+  // resolves once the probe is done, so the status after it is the truth.
+  void app
+    .getGPUInfo('complete')
+    .then((info) => {
+      const gpu = app.getGPUFeatureStatus()
+      const device = (info as { gpuDevice?: Array<{ active?: boolean }> }).gpuDevice?.find(
+        (d) => d.active
+      )
+      const renderer =
+        (info as { auxAttributes?: { glRenderer?: string } }).auxAttributes?.glRenderer ?? '?'
+      log(
+        'gpu',
+        `video_encode=${gpu.video_encode} compositing=${gpu.gpu_compositing}`,
+        `active=${device ? 'sim' : 'nao'}`,
+        renderer
+      )
+    })
+    .catch((error: unknown) => log('gpu', 'could not read:', String(error)))
   registerWindowControls()
   registerCapture()
   registerProcessAudio(mainWindow)
