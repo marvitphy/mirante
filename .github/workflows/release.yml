@@ -106,3 +106,33 @@ jobs:
           MIRANTE_SIGNAL_URL: ${{ vars.MIRANTE_SIGNAL_URL }}
         run: npm run release
 
+      # electron-builder reported success on v0.1.40 having uploaded only the
+      # blockmap: no installer, and no latest.yml, so every installed copy
+      # polled a 404 and nobody could update. A publisher that half-finishes
+      # and exits zero is worse than one that fails, because nothing tells
+      # you. The release is not done until the three files are actually
+      # there, so check, and put up whatever is missing.
+      - name: Make sure the release really has its files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "v$((Get-Content package.json | ConvertFrom-Json).version)"
+          $want = @(
+            "Mirante-$((Get-Content package.json | ConvertFrom-Json).version)-x64.exe",
+            "Mirante-$((Get-Content package.json | ConvertFrom-Json).version)-x64.exe.blockmap",
+            "latest.yml"
+          )
+          $have = (gh release view $tag --json assets -q '.assets[].name') -split "`n"
+          $missing = $want | Where-Object { $_ -notin $have }
+          if ($missing) {
+            Write-Host "faltando: $($missing -join ', ') — subindo de novo"
+            $paths = $missing | ForEach-Object { Join-Path dist $_ }
+            gh release upload $tag @paths --clobber
+          }
+          # Re-read, and fail loudly if anything is still absent.
+          $have = (gh release view $tag --json assets -q '.assets[].name') -split "`n"
+          $still = $want | Where-Object { $_ -notin $have }
+          if ($still) { throw "release $tag incompleta: $($still -join ', ')" }
+          Write-Host "release $tag completa"
+
