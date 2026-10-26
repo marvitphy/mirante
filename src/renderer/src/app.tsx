@@ -653,6 +653,14 @@ export function App(): JSX.Element {
    * machine is his uplink; reconstructed on one machine only is that
    * listener's downlink. Nothing else separates those two.
    */
+  // Why you can or cannot hear people, written down while it is happening.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      console.info('[som] ' + session.mixer.describe())
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [])
+
   const peersRef = useRef(snapshot.peers)
   peersRef.current = snapshot.peers
   useEffect(() => {

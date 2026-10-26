@@ -82,7 +82,7 @@ export function SettingsModal({
   const [monitoring, setMonitoringState] = useState(false)
   const setMonitoring = (on: boolean): void => {
     setMonitoringState(on)
-    setMonitor(on)
+    setMonitor(on, settings.speakerId)
   }
   useEffect(() => () => setMonitor(false), [])
   const background = activeBackground(settings, useCustomBackground())

@@ -268,10 +268,25 @@ export function micDeviceId(): string {
  * Echo cancellation is on, so speakers are survivable, but headphones are
  * still the sane way to use it.
  */
-export function setMonitor(on: boolean): void {
+export function setMonitor(on: boolean, deviceId = ''): void {
   if (!chain || chain.monitoring === on) return
-  if (on) chain.analyser.connect(chain.context.destination)
-  else chain.analyser.disconnect(chain.context.destination)
+  if (on) {
+    // Out of the same speakers as everyone else's voices. This context is
+    // its own, so it needs pointing on its own — otherwise auditioning your
+    // microphone plays somewhere you are not listening, which looks exactly
+    // like the monitor being broken.
+    const context = chain.context as AudioContext & {
+      setSinkId?: (id: string) => Promise<void>
+    }
+    if (typeof context.setSinkId === 'function') {
+      void context.setSinkId(deviceId).catch((error: unknown) => {
+        console.warn('[mic] saida do monitor recusada:', error)
+      })
+    }
+    chain.analyser.connect(chain.context.destination)
+  } else {
+    chain.analyser.disconnect(chain.context.destination)
+  }
   chain.monitoring = on
 }
 

@@ -206,7 +206,7 @@ export class MeshSession {
   private readonly streaks = new Map<string, number>()
   private governorTimer: number | null = null
   private readonly peers = new Map<string, PeerView>()
-  private readonly mixer = new AudioMixer()
+  readonly mixer = new AudioMixer()
   private readonly listeners = new Set<Listener>()
 
   private self: PeerInfo | null = null

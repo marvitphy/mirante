@@ -94,6 +94,10 @@ export class AudioMixer {
       this.master = this.context.createGain()
       this.master.gain.value = this.masterVolume
       this.master.connect(this.context.destination)
+      // The chosen device has to be applied to a context that did not exist
+      // when the setting was read. Without this, picking an output before
+      // anyone speaks is forgotten the moment the context is finally built.
+      void this.applySink()
     }
     if (this.context.state === 'suspended') void this.context.resume()
     return this.context
@@ -151,7 +155,6 @@ export class AudioMixer {
       sink.muted = true
       sink.autoplay = true
       void sink.play().catch(() => undefined)
-      if (this.outputDevice) void this.applySink(sink)
 
       return { stream, kind, source, sink }
     })
@@ -237,25 +240,43 @@ export class AudioMixer {
   /**
    * Route playback to a specific output device.
    *
-   * Applied to the per-peer sink elements, which is where the audio actually
-   * leaves: an AudioContext cannot be re-pointed after creation in Chromium,
-   * but the elements feeding it can.
+   * This used to point the per-peer `<audio>` elements, on the belief that
+   * "an AudioContext cannot be re-pointed after creation in Chromium". Two
+   * things were wrong with that at once.
+   *
+   * Those elements are MUTED. They exist only because Chromium will not
+   * pull from a `MediaStreamAudioSourceNode` unless something is also
+   * consuming the stream; not one sample of what you hear comes out of
+   * them. Pointing them at a device moved nothing.
+   *
+   * And the premise is out of date: `AudioContext.setSinkId` has existed
+   * since Chromium 110 and works here — verified on this build. So the
+   * context stayed wherever the default output happened to be when it was
+   * created, the setting did nothing, and switching the system output
+   * afterwards did not move it either. Which is how someone ends up with
+   * the app playing out of the speakers while their headset is the system
+   * default and the room swears they can all hear it.
+   *
+   * Empty string means "follow the system default", including when the
+   * person changes it later.
    */
   async setOutputDevice(deviceId: string): Promise<void> {
     this.outputDevice = deviceId
-    for (const channel of this.channels.values()) {
-      for (const input of channel.inputs) await this.applySink(input.sink)
-    }
+    await this.applySink()
   }
 
-  private async applySink(sink: HTMLAudioElement): Promise<void> {
-    const target = sink as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }
-    if (typeof target.setSinkId !== 'function') return
+  /** Point the context where the setting says, if it can be pointed. */
+  private async applySink(): Promise<void> {
+    const context = this.context as
+      | (AudioContext & { setSinkId?: (id: string) => Promise<void> })
+      | null
+    if (!context || typeof context.setSinkId !== 'function') return
     try {
-      await target.setSinkId(this.outputDevice)
+      await context.setSinkId(this.outputDevice)
     } catch (error) {
-      // A device can vanish between listing and selection.
-      console.warn('[audio] setSinkId failed:', error)
+      // A device can vanish between being listed and being chosen. Staying
+      // on the default is a better outcome than throwing away playback.
+      console.warn(`[audio] saida "${this.outputDevice}" recusada:`, error)
     }
   }
 
@@ -281,6 +302,45 @@ export class AudioMixer {
     const rms = Math.sqrt(sum / channel.buffer.length)
     // Perceptual curve: raw RMS barely moves for normal speech.
     return Math.min(1, rms * 3.2)
+  }
+
+  /**
+   * A one-line account of why you can or cannot hear people.
+   *
+   * "Todo mundo escuta menos eu" had no answer, because every stage between
+   * a track arriving and a speaker moving was invisible: whether a channel
+   * was ever built, whether the stream carried audio at all, whether this
+   * person's content is the one allowed through, whether the context is
+   * running, and how loud the result actually is. Any one of those is
+   * silence, and they need different fixes.
+   */
+  describe(): string {
+    const context = this.context
+    const head =
+      `ctx=${context ? context.state : 'nenhum'}` +
+      `/${context ? Math.round(context.sampleRate) : 0}Hz` +
+      ` master=${this.masterVolume}` +
+      ` saida=${this.outputDevice || 'padrao'}` +
+      ` sink=${
+        (this.context as (AudioContext & { sinkId?: string }) | null)?.sinkId ?? '?'
+      }` +
+      ` ouvindo=${[...this.contentOn].join(',') || 'ninguem'}`
+
+    if (this.channels.size === 0) return `${head} | nenhum canal`
+
+    const parts: string[] = []
+    for (const [id, channel] of this.channels) {
+      const kinds = channel.inputs
+        .map((input) => `${input.kind}:${input.stream.getAudioTracks().length}t`)
+        .join('+')
+      parts.push(
+        `${id.slice(0, 6)}[${kinds || 'sem faixa'}` +
+          ` ganho=${channel.gain.gain.value.toFixed(2)}` +
+          ` conteudo=${channel.content.gain.value.toFixed(2)}` +
+          ` nivel=${this.level(id).toFixed(3)}]`
+      )
+    }
+    return `${head} | ${parts.join(' ')}`
   }
 
   dispose(): void {
