@@ -173,13 +173,48 @@ export function App(): JSX.Element {
     setPickerSources(sources)
   }, [])
 
+  /**
+   * On Linux the source list belongs to xdg-desktop-portal, whose picker
+   * Chromium opens for us inside getDisplayMedia(). Asking desktopCapturer for
+   * a source first would stack a second picker on top of it and hand the
+   * handler an id from a session that is already gone — see capture.ts.
+   */
+  const startSystemShare = useCallback(async () => {
+    setShareError(null)
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        // PipeWire sources do not advertise the frame-rate ceiling our own
+        // picker asks for. Encoding is capped downstream by applyProfile.
+        video: true,
+        audio: false
+      })
+    } catch (error) {
+      const fault = error as DOMException
+      // Cancelling the portal picker is a decision, not a failure to report.
+      if (fault.name === 'AbortError' || fault.name === 'NotAllowedError') return
+      console.error(`[share] getDisplayMedia failed: ${fault.name} — ${fault.message}`)
+      setShareError(`Não consegui abrir a transmissão — ${fault.name}: ${fault.message}`)
+      return
+    }
+    await session.setScreen(stream, stream.getVideoTracks()[0]?.label ?? null)
+  }, [])
+
+  const openPicker = useCallback(async () => {
+    if (window.mirante.platform === 'linux') {
+      await startSystemShare()
+      return
+    }
+    await openSourcePicker()
+  }, [openSourcePicker, startSystemShare])
+
   const toggleScreen = useCallback(async () => {
     if (snapshot.local.screen) {
       await stopScreen()
       return
     }
-    await openSourcePicker()
-  }, [openSourcePicker, snapshot.local.screen, stopScreen])
+    await openPicker()
+  }, [openPicker, snapshot.local.screen, stopScreen])
 
   const confirmSource = useCallback(async (sourceId: string, withSound: boolean) => {
     setPickerSources(null)
@@ -1069,7 +1104,7 @@ export function App(): JSX.Element {
       profile={snapshot.local.profile}
       layout={settings.railPosition === 'right' ? 'column' : 'bar'}
       onToggleScreen={() => void toggleScreen()}
-      onChangeSource={() => void openSourcePicker()}
+      onChangeSource={() => void openPicker()}
       onToggleCamera={() => void toggleCamera()}
       onPickCamera={() => setCameraPicker('adjust')}
       onToggleMic={() => void toggleMic()}

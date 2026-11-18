@@ -163,3 +163,60 @@ jobs:
             throw "release $tag nao da para instalar, falta: $($stillRequired -join ', ')"
           }
           Write-Host "release $tag completa o bastante para atualizar"
+
+  linux:
+    # Only after Windows has finished publishing: electron-builder can race
+    # two publishers into creating the same release (v0.1.46), and this job
+    # uploads with gh instead of letting a second publisher create one.
+    needs: windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Require a reachable signalling URL
+        if: ${{ vars.MIRANTE_SIGNAL_URL == '' }}
+        run: |
+          echo "::error::MIRANTE_SIGNAL_URL is not set; a Linux build would ship pointing at localhost."
+          exit 1
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: electron-${{ runner.os }}-
+
+      - name: Install
+        run: npm ci --prefer-offline --no-audit --fund=false
+
+      - name: Generate icon
+        run: npm run icon
+
+      - name: Build .deb and AppImage
+        env:
+          MIRANTE_SIGNAL_URL: ${{ vars.MIRANTE_SIGNAL_URL }}
+        run: npm run dist:linux
+
+      - name: Keep the packages as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+          if-no-files-found: error
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          gh release upload "$tag" dist/*.deb dist/*.AppImage --clobber

@@ -35,6 +35,13 @@ import { audioAddonReady, pidForWindow } from './process-audio'
  * then calls `getDisplayMedia()`, which the handler satisfies immediately from
  * the armed value. Cancelling never reaches Chromium at all, because the
  * request is never made.
+ *
+ * Linux/PipeWire is the exception. There, `getSources()` delegates the source
+ * list to xdg-desktop-portal and shows its picker; a fresh session can return
+ * a different source id, so an id armed before the picker ran goes stale and
+ * `getDisplayMedia()` fails. The Linux handler therefore calls `getSources()`
+ * itself, inside the display-media request, and serves the live result.
+ * Cancelling that portal picker rejects cleanly via `callback(null)`.
  */
 
 /** A capture source, flattened for IPC (native objects do not cross the bridge). */
@@ -196,6 +203,30 @@ export function registerCapture(): void {
     if (armed) log('capture', 'disarmed')
     armed = null
   })
+
+  // On Linux, getSources() shows the xdg-desktop-portal picker itself. The
+  // handler has to ask for a source inside the request: an id armed before
+  // the picker ran belongs to a session that is already gone. callback(null)
+  // is the clean decline when the user cancels the portal picker.
+  if (process.platform === 'linux') {
+    session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+      try {
+        const sources = await readSources(false)
+        const source = sources[0]
+        if (!source) {
+          log('capture', 'no source from the portal picker — declining')
+          callback(null)
+          return
+        }
+        log('capture', `granting "${source.name}" (portal)`)
+        callback({ video: source })
+      } catch (error) {
+        log('capture', 'portal picker failed:', String(error))
+        callback(null)
+      }
+    })
+    return
+  }
 
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {

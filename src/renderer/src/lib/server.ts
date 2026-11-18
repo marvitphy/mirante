@@ -18,5 +18,10 @@ declare const __SIGNAL_URL__: string
 export const BUILT_IN_SERVER = __SIGNAL_URL__
 
 export function resolveServer(chosen: string): string {
-  return chosen.trim() || BUILT_IN_SERVER
+  const url = (chosen.trim() || BUILT_IN_SERVER).trim()
+  // The lobby is read over HTTPS and its address is the one people copy from
+  // the browser. Accepting it here saves a silent failure: Signaling.open()
+  // rejects anything without a ws:// or wss:// scheme as bad_server_url, so
+  // pasting the perfectly valid https address left the room unable to join.
+  return url.replace(/^https:\/\//i, 'wss://').replace(/^http:\/\//i, 'ws://')
 }
