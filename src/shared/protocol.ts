@@ -47,6 +47,21 @@ export interface PeerInfo {
  * is created, nothing is reserved, and an empty room stops existing without
  * anyone deleting it.
  */
+export interface ChatPayload {
+  from: PeerId
+  /** Stable across reconnects, so a client recognises its own older messages. */
+  clientId: string
+  /**
+   * Author as they were when they wrote it. The id changes on reconnect and
+   * the peer may leave before anyone reads the message, so the name travels
+   * with the text instead of being looked up in the room.
+   */
+  name: string
+  hue: number
+  text: string
+  at: number
+}
+
 export interface LobbyPerson {
   name: string
   /** The same hue they will have inside, so a face is the same face. */
@@ -150,6 +165,8 @@ export type ClientMessage =
       clientId: string
     }
   | { t: 'publishState'; state: PeerPublishState }
+  /** Room-wide text. The server fills in the author from the connection. */
+  | { t: 'chat'; text: string }
   /** Ask a publisher for its stream. The publisher answers with `joinResponse`. */
   | { t: 'join'; to: PeerId }
   | { t: 'leaveStream'; to: PeerId }
@@ -186,6 +203,7 @@ export type ServerMessage =
   | { t: 'peerJoined'; peer: PeerInfo; state: PeerPublishState }
   | { t: 'peerLeft'; id: PeerId }
   | { t: 'peerState'; id: PeerId; state: PeerPublishState }
+  | ({ t: 'chat' } & ChatPayload)
   | { t: 'join'; from: PeerId }
   | { t: 'leaveStream'; from: PeerId }
   | { t: 'watchVideo'; from: PeerId; video: boolean }

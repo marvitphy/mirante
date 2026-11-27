@@ -6,6 +6,7 @@ import { IconClose } from './components/icons'
 import { JoinScreen } from './components/join-screen'
 import { MiranteRail } from './components/mirante-rail'
 import { CameraPicker } from './components/camera-picker'
+import { ChatPanel } from './components/chat-panel'
 import { SettingsModal } from './components/settings-modal'
 import { OverlayPortal } from './overlay/overlay-portal'
 import { OverlaySheet, tilesFromRoom, type Anchor } from './overlay/overlay-sheet'
@@ -118,6 +119,7 @@ export function App(): JSX.Element {
   const [mode, setMode] = useState<ViewMode>('normal')
   const [shareError, setShareError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
   /** `first`: turning the camera on asked which one. `adjust`: opened from settings. */
   const [cameraPicker, setCameraPicker] = useState<'first' | 'adjust' | null>(null)
   const settings = useSettings()
@@ -1076,6 +1078,10 @@ export function App(): JSX.Element {
       onProfile={(profile: ScreenProfileName) => void session.setScreenProfile(profile)}
       onLeave={() => void leave()}
       onSettings={() => setSettingsOpen(true)}
+      chat={snapshot.chat}
+      onSendChat={(text) => session.sendChat(text)}
+      chatOpen={chatOpen}
+      onToggleChat={() => setChatOpen((open) => !open)}
     />
   )
 
@@ -1203,6 +1209,13 @@ export function App(): JSX.Element {
       {settings.railPosition === 'right' ? (
         <aside className="tm-side">
           {rail}
+          {chatOpen && (
+            <ChatPanel
+              messages={snapshot.chat}
+              onSend={(text) => session.sendChat(text)}
+              onClose={() => setChatOpen(false)}
+            />
+          )}
           {dock}
         </aside>
       ) : (

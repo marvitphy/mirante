@@ -306,6 +306,23 @@ export class Room extends DurableObject<Env> {
         this.report()
         break
       }
+      case 'chat': {
+        // Every WebSocket message here is a billed request, but this costs no
+        // more than the peerState broadcast above: no storage, no alarm, just
+        // a fan-out to the sockets already attached to this room.
+        const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : ''
+        if (!text) break
+        this.broadcast({
+          t: 'chat',
+          from: self.info.id,
+          clientId: self.clientId,
+          name: self.info.name,
+          hue: self.info.hue,
+          text,
+          at: Date.now()
+        })
+        break
+      }
       case 'join': {
         const target = this.peers().find((p) => p.data.info.id === msg.to)
         if (target) this.send(target.socket, { t: 'join', from: self.info.id })

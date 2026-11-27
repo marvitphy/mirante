@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat na sala — plano de implementação</title>
+<style>
+  :root { color-scheme: dark; --bg:#0a0810; --surface:#14111d; --rule:#2a2536; --text:#eeecf4; --muted:#a09aae; --accent:#b79bf5; --mono: ui-monospace, "IBM Plex Mono", monospace; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.6 system-ui, sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:48px 20px 96px }
+  h1 { font-size:38px; letter-spacing:-.02em; margin:0 0 8px }
+  h2 { font:600 13px/1.2 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin:40px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--rule) }
+  p { margin:8px 0; color:var(--muted) }
+  li { margin:6px 0; color:var(--muted) }
+  strong { color:var(--text) }
+  code { font:12.5px/1.5 var(--mono); color:#d8cff8; background:#191527; padding:1px 4px }
+  pre { background:var(--surface); border:1px solid var(--rule); padding:14px 16px; overflow-x:auto; font:12.5px/1.6 var(--mono); color:#d8cff8 }
+  pre code { background:none; padding:0 }
+  .lede { font-size:16px; color:var(--text) }
+  .tag { font:11px var(--mono); letter-spacing:.1em; color:var(--muted) }
+</style>
+</head>
+<body>
+<main>
+<span class="tag">MIRANTE · PLANO DE IMPLEMENTAÇÃO · 2026-11-27</span>
+<h1>Chat na sala</h1>
+<p class="lede">Texto curto na sala, sem interromper quem fala: um link, um “entro já”, o que assistir. Entrega pelo socket de sinalização que já existe; o servidor só retransmite, como faz com <code>peerState</code>. Nada de media passa por ele, nada é gravado, nada sobrevive à saída da sala.</p>
+<p><strong>Decisões:</strong> broadcast para a sala inteira · painel aberto por botão no dock · histórico só em memória · strings em pt-BR · nenhuma dependência nova.</p>
+
+<h2>1 · Protocolo — src/shared/protocol.ts</h2>
+<p>Um verbo <code>chat</code> nos dois sentidos. Sem bump de <code>PROTOCOL_VERSION</code>: clientes antigos ignoram verbos desconhecidos e servidores antigos descartam o novo.</p>
+<pre><code>export interface ChatPayload {
+  from: PeerId
+  clientId: string  // estável entre reconnects; marca mensagens "minhas"
+  name: string
+  hue: number
+  text: string
+  at: number
+}</code></pre>
+<ul>
+  <li><code>ClientMessage</code>: <code>| { t: 'chat'; text: string }</code></li>
+  <li><code>ServerMessage</code>: <code>| ({ t: 'chat' } &amp; ChatPayload)</code></li>
+</ul>
+<p>Autor, nome e cor vão no payload porque o servidor os conhece (não vêm do cliente) e porque sobrevivem a quem sai ou reconecta com outro id. O servidor devolve a mensagem também a quem enviou: um caminho só, sem insert otimista nem dedupe.</p>
+
+<h2>2 · Servidores — os dois</h2>
+<ul>
+  <li><code>server/src/index.ts</code>: <code>case 'chat'</code> no switch (~linha 252). Validar <code>typeof msg.text === 'string'</code>, trim + <code>slice(0, 500)</code>, descartar vazio. <code>broadcast(room, ...)</code> para todos com <code>peer.info</code> e <code>Date.now()</code>.</li>
+  <li><code>worker/src/room.ts</code>: mesmo caso (~linha 300), com <code>self.info</code> e <code>this.broadcast({...})</code>. Sem storage, sem <code>report()</code>, sem alarme — chat não muda o censo da sala. Cada mensagem custa um request faturado, o mesmo custo de <code>peerState</code>.</li>
+</ul>
+
+<h2>3 · Sessão — src/renderer/src/rtc/mesh-session.ts</h2>
+<ul>
+  <li><code>const CHAT_LIMIT = 200</code>; campo <code>private readonly chat: ChatEntry[] = []</code>.</li>
+  <li><code>SessionSnapshot</code> ganha <code>chat: ChatEntry[]</code>; <code>buildSnapshot()</code> → <code>chat: [...this.chat]</code>.</li>
+  <li><code>handle()</code> ganha <code>case 'chat'</code>: <code>mine: message.clientId === this.clientId</code>, push, <code>shift()</code> acima de 200, <code>emit()</code>. Sem som.</li>
+  <li><code>disconnect()</code>: <code>this.chat.length = 0</code> junto com <code>peers.clear()</code>. <code>connect()</code> chama <code>disconnect()</code>: trocar de sala limpa; um blip de sinalização não limpa — é a mesma sessão.</li>
+  <li>Método público <code>sendChat(text)</code>: faz trim e chama <code>this.signaling?.send({ t: 'chat', text: trimmed })</code>.</li>
+</ul>
+<p><code>Signaling.send()</code> já descarta mensagens com o socket fechado. Aceitar best-effort; não construir fila offline.</p>
+
+<h2>4 · UI</h2>
+<ul>
+  <li><code>src/renderer/src/components/chat-panel.tsx</code> (novo): head “Chat da sala” + fechar; log <code>role="log"</code> com auto-scroll; nome colorido pelo hue (ou “você”), hora pt-BR, texto <code>.selectable</code>; form com input de uma linha (<code>maxLength={500}</code>, <code>autoFocus</code>) e botão Enviar. Fecha por clique fora (ignorando <code>.tm-dock__chat</code>) e Escape — copiar os efeitos de <code>app-mixer.tsx:45-64</code>. Reutilizar <code>IconClose</code>, <code>.tm-iconbtn</code>, padrão de Avatar. Sem textarea, sem badge de não-lidas.</li>
+  <li><code>src/renderer/src/components/icons.tsx</code>: <code>IconChat</code> no padrão do wrapper <code>Icon</code> (grid 24, stroke 1.75).</li>
+  <li><code>src/renderer/src/components/control-dock.tsx</code>: props <code>chat</code> e <code>onSendChat</code>; estado local <code>chatOpen</code>; pill ao lado de Configurações em <code>tm-dock__foot</code>, com painel ancorado — mesmo padrão de <code>.tm-dock__mixer</code> + <code>AppMixer</code>.</li>
+  <li><code>src/renderer/src/app.tsx</code>: passar <code>chat={snapshot.chat}</code> e <code>onSendChat={(text) =&gt; session.sendChat(text)}</code>. <code>useHotkeys</code> já ignora INPUT/TEXTAREA.</li>
+</ul>
+<p><strong>Tradeoff aceito:</strong> em fullscreen o dock some e o chat fica inacessível até <code>f</code>/Escape. Não criar camada flutuante nova para isso.</p>
+
+<h2>5 · CSS — src/renderer/src/styles/controls.css</h2>
+<p>Bloco <code>.tm-chat*</code> ao lado de <code>.tm-mixer</code>: popover ancorado na borda direita do dock, abrindo para cima, <code>z-index: 40</code>, <code>width: min(320px, calc(100vw - var(--s-6)))</code>, altura limitada, flex column, <code>--surface-1</code>, <code>--rule</code>, <code>--shadow-pop</code>. Log com <code>min-height:0; overflow-y:auto; overscroll-behavior:contain</code>, texto com <code>overflow-wrap:anywhere</code>, input com <code>--surface-input</code>. Sem lilac — ele é reservado para “Transmitir tela”. Ajustar <code>.tm-dock--column .tm-dock__foot</code> para <code>repeat(2, var(--dock-row)) minmax(0, 1fr)</code>.</p>
+
+<h2>6 · Verificação</h2>
+<ol>
+  <li><code>npm run typecheck</code>, <code>npm --prefix server run typecheck</code>, <code>npm --prefix worker run typecheck</code>.</li>
+  <li><code>npm run signal</code> + <code>npm run dev</code> + <code>npm run peer</code>: duas janelas, mesma sala, nomes diferentes. Mensagem aparece nas duas, inclusive para quem enviou. Espaços não enviam; texto longo chega com no máximo 500 caracteres.</li>
+  <li>Fechar/reabrir por clique fora e Escape; digitar no chat não aciona atalhos (<code>f</code>, <code>m</code>, setas).</li>
+  <li>Sair e entrar: histórico vazio. Reiniciar o servidor com as janelas abertas: histórico permanece após o reconnect.</li>
+  <li>Com o Worker local: <code>npm --prefix worker run dev</code>, apontar <code>MIRANTE_SIGNAL_URL</code> para ele e repetir o item 2.</li>
+</ol>
+
+<h2>7 · Fora de escopo</h2>
+<p>DMs, anexos, persistência, histórico ao entrar, som de nova mensagem, badge, edição/apagamento, multilinha, identidade criptográfica (<code>identity.ts</code> não está ligado ao protocolo).</p>
+</main>
+</body>
+</html>

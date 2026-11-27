@@ -1,5 +1,6 @@
 import {
   emptyPublishState,
+  type ChatPayload,
   type SessionDescription,
   type PeerInfo,
   type PeerPublishState,
@@ -31,6 +32,9 @@ const REJOIN_AFTER_MS = 45_000
 
 /** How long to wait for a `joinResponse` before asking again. */
 const JOIN_RETRY_MS = 10_000
+
+/** Room chat is a scratchpad, not a transcript: enough to scroll back a bit. */
+const CHAT_LIMIT = 200
 
 /** The slots that carry sound, in the order the mixer should receive them. */
 const AUDIO_SLOTS: SlotName[] = ['screenAudio', 'mic']
@@ -163,12 +167,18 @@ export interface LocalPublish {
   watchers: number
 }
 
+/** One line of room chat, with the author as they were when they wrote it. */
+export interface ChatEntry extends Omit<ChatPayload, 'clientId'> {
+  mine: boolean
+}
+
 export interface SessionSnapshot {
   status: SignalingStatus
   /** Whose broadcast you can hear, if any. */
   listening: string | null
   self: PeerInfo | null
   peers: PeerView[]
+  chat: ChatEntry[]
   local: LocalPublish
   /** Peer id whose stream is on the stage, or null for the local preview. */
   focused: string | null
@@ -221,6 +231,7 @@ export class MeshSession {
   /** Desde quando a live de alguem esta sem imagem, por peer. */
   private readonly semImagem = new Map<string, number>()
   private readonly peers = new Map<string, PeerView>()
+  private readonly chat: ChatEntry[] = []
   readonly mixer = new AudioMixer()
   private readonly listeners = new Set<Listener>()
 
@@ -278,6 +289,7 @@ export class MeshSession {
       status: this.status,
       self: this.self,
       peers,
+      chat: [...this.chat],
       local: { ...this.local, watchers: this.watcherCount() },
       focused: this.focused,
       listening: this.listening,
@@ -341,6 +353,7 @@ export class MeshSession {
     this.viewers.clear()
     this.earlyCandidates.clear()
     this.peers.clear()
+    this.chat.length = 0
     this.mixer.dispose()
     this.signaling?.close()
     this.signaling = null
@@ -569,6 +582,22 @@ export class MeshSession {
 
       case 'signal': {
         await this.handleSignal(message.from, message.dir, message.payload)
+        break
+      }
+
+      case 'chat': {
+        // The server echoes to everyone, including the sender: one path, no
+        // optimistic insert to reconcile when the socket is reconnecting.
+        this.chat.push({
+          from: message.from,
+          name: message.name,
+          hue: message.hue,
+          text: message.text,
+          at: message.at,
+          mine: message.clientId === this.clientId
+        })
+        if (this.chat.length > CHAT_LIMIT) this.chat.shift()
+        this.emit()
         break
       }
 
@@ -1279,6 +1308,15 @@ export class MeshSession {
       activityIcon: this.activityIcon ?? undefined
     }
     this.signaling?.send({ t: 'publishState', state })
+  }
+
+  /** Best effort: a message typed during a blip is dropped, not queued. */
+  sendChat(text: string): boolean {
+    const trimmed = text.trim()
+    if (!trimmed) return false
+    if (!this.signaling) return false
+    this.signaling.send({ t: 'chat', text: trimmed })
+    return true
   }
 
   /**
