@@ -219,7 +219,13 @@ wss.on('connection', (socket: WebSocket) => {
       const id = randomUUID()
       const name = (msg.name || 'convidado').slice(0, 32)
       peer = {
-        info: { id, name, hue: hueFromId(id), joinedAt: Date.now() },
+        info: {
+          id,
+          clientId: msg.clientId,
+          name,
+          hue: hueFromId(id),
+          joinedAt: Date.now()
+        },
         state: emptyPublishState(),
         socket,
         room: roomId,
@@ -228,7 +234,7 @@ wss.on('connection', (socket: WebSocket) => {
       }
       room.set(id, peer)
 
-      const joining = peer
+      const joining: Peer = peer
       // ICE resolution can hit the network (Cloudflare), so the welcome is
       // sent once credentials are in hand rather than blocking the socket.
       void resolveIceServers(iceConfig, id).then((iceServers) => {
@@ -241,7 +247,7 @@ wss.on('connection', (socket: WebSocket) => {
           iceServers
         })
       })
-      broadcast(room, { t: 'peerJoined', peer: peer.info, state: peer.state }, id)
+      broadcast(room, { t: 'peerJoined', peer: joining.info, state: joining.state }, id)
       console.log(`[room:${roomId}] + ${name} (${room.size})`)
       return
     }
@@ -253,6 +259,23 @@ wss.on('connection', (socket: WebSocket) => {
       case 'publishState': {
         peer.state = msg.state
         broadcast(room, { t: 'peerState', id: peer.info.id, state: msg.state }, peer.info.id)
+        break
+      }
+      case 'chat': {
+        // The only user-controlled string that reaches other people. The
+        // existing verbs carry ids and enums, so nothing else here needs a
+        // runtime check before it is fanned out.
+        const text = typeof msg.text === 'string' ? msg.text.trim().slice(0, 500) : ''
+        if (!text) break
+        broadcast(room, {
+          t: 'chat',
+          from: peer.info.id,
+          clientId: peer.clientId,
+          name: peer.info.name,
+          hue: peer.info.hue,
+          text,
+          at: Date.now()
+        })
         break
       }
       case 'join': {

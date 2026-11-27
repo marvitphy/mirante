@@ -1,10 +1,13 @@
 import { useState, type JSX } from 'react'
 
+import type { ChatEntry } from '../rtc/mesh-session'
 import type { ScreenProfileName } from '../rtc/sdp'
 import { AppMixer } from './app-mixer'
+import { ChatPanel } from './chat-panel'
 import {
   IconCamera,
   IconCameraOff,
+  IconChat,
   IconLeave,
   IconMic,
   IconMicOff,
@@ -38,6 +41,10 @@ interface ControlDockProps {
   onProfile: (profile: ScreenProfileName) => void
   onLeave: () => void
   onSettings: () => void
+  chat: ChatEntry[]
+  onSendChat: (text: string) => boolean
+  chatOpen: boolean
+  onToggleChat: () => void
   /** `bar` runs along the bottom; `column` stacks inside the sidebar. */
   layout: 'bar' | 'column'
 }
@@ -62,6 +69,10 @@ export function ControlDock({
   onProfile,
   onLeave,
   onSettings,
+  chat,
+  onSendChat,
+  chatOpen,
+  onToggleChat,
   layout
 }: ControlDockProps): JSX.Element {
   const [mixerOpen, setMixerOpen] = useState(false)
@@ -181,6 +192,25 @@ export function ControlDock({
           The version line goes underneath, where it informs without
           competing. */}
       <div className="tm-dock__foot">
+        <div className="tm-dock__chat">
+          <button
+            type="button"
+            className={`tm-pill tm-pill--lone${chatOpen ? ' is-on' : ''}`}
+            onClick={onToggleChat}
+            aria-expanded={chatOpen}
+            title="Chat da sala"
+          >
+            <IconChat size={16} />
+          </button>
+          {layout === 'bar' && chatOpen && (
+            <ChatPanel
+              messages={chat}
+              onSend={onSendChat}
+              onClose={onToggleChat}
+            />
+          )}
+        </div>
+
         <button
           type="button"
           className="tm-pill tm-pill--lone"

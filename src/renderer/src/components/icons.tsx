@@ -180,6 +180,14 @@ export const IconSliders = (p: IconProps): JSX.Element => (
   </Icon>
 )
 
+/** A speech bubble: words, as opposed to the sound and picture around them. */
+export const IconChat = (p: IconProps): JSX.Element => (
+  <Icon {...p}>
+    <path d="M4 5.5h16v11H9.5L4 20V5.5Z" />
+    <path d="M8 9.5h8M8 12.5h5" />
+  </Icon>
+)
+
 /** A small chevron: there is a choice behind this control. */
 export const IconCaret = (p: IconProps): JSX.Element => (
   <Icon {...p}>
